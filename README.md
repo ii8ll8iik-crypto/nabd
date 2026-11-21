@@ -3,7 +3,7 @@
 > **Forecasting cities by building, not only by breaking.**
 > A real-time 3D urban physics studio, `Relate` graph engine, and grounded AI strategist that simulates how injecting **any** new business or public facility ripples across real street topologies, terrain slopes, ecosystems, and competing services.
 
-![Nabd System Architecture](docs/assets/nabd-architecture.svg)
+![Nabd System Architecture](docs/assets/nabd-architecture.png)
 
 ---
 
@@ -18,7 +18,7 @@ Answering that question rigorously is impossible with flat straight-line radius 
 3. **Hop 3 — Induced Ecosystem Synergy:** What secondary demand deficits does the new facility *create* around it (e.g., a clinic inducing pharmacy demand, or a campus hub inducing stationery and cafe deficits)?
 4. **Hop 4 — Congestion & Uncertainty:** At what load does the facility or adjacent street hit non-linear queuing/traffic delay, and how robust is the site across 200 stochastic worlds?
 
-![Multi-Hop Constructive Paradigm](docs/assets/constructive-paradigm.svg)
+![Multi-Hop Constructive Paradigm](docs/assets/constructive-paradigm.png)
 
 ---
 
