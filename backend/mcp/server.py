@@ -18,7 +18,6 @@ from backend.engine.physics import (
     DemographicZoneOverride,
     RealityOverrides,
     UrbanGraphEngine,
-    query_relate,
 )
 
 mcp = MCPServer("nabd-urban-physics")
@@ -245,11 +244,18 @@ def run_relate_cypher_readonly(area_slug: str, cypher: str) -> str:
     """Execute a safe read-only Cypher query directly against a Relate (.rl) urban graph (max 50 rows returned)."""
     if _FORBIDDEN_CYPHER.search(cypher):
         raise ValueError("Write operations are forbidden. Only read-only MATCH/RETURN queries are allowed.")
-    db_path = DATA_DIR / f"{area_slug}.rl"
-    if not db_path.exists():
-        raise ValueError(f"Area '{area_slug}' not found.")
-    rows = query_relate(db_path, cypher)
-    return json.dumps({"row_count": len(rows), "rows": rows[:50]}, ensure_ascii=False, indent=2)
+    eng = _get_engine(area_slug)
+    res = eng.relate.query(cypher, tag="mcp:cypher_readonly")
+    rows = res.rows
+    return json.dumps(
+        {
+            "row_count": len(rows),
+            "elapsed_ms": round(float(res.timings.get("elapsed_ms", 0.0)), 3),
+            "rows": rows[:50],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 if __name__ == "__main__":

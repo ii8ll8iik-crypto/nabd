@@ -59,3 +59,39 @@ def test_relate_core_schema_rollback_and_commit_persistence(tmp_path: Path):
         )
         assert len(check.rows) == 1
         assert check.rows[0]["status"] == "APPROVED"
+
+
+def test_v2_engine_live_whatif_parcel_optimizer_and_manhattan(tmp_path: Path):
+    from backend.engine.physics import UrbanGraphEngine
+
+    irbid_copy = tmp_path / "irbid-v2.rl"
+    shutil.copy2(Path("data/irbid-yarmouk.rl"), irbid_copy)
+    with UrbanGraphEngine(irbid_copy) as eng:
+        assert eng.has_elevation
+        assert len(eng.env_zones) >= 2
+        sim = eng.simulate_injection(32.5365, 35.8555, category="clinic", monte_carlo_runs=30)
+        assert sim["relate_transaction"]["tx_state"] == "ROLLED_BACK"
+        assert sim["relate_transaction"]["parcel"]["parcel_id"] == sim["parcel_context"]["parcel_id"]
+        assert "nearby_services" in sim["relate_transaction"]["multi_hop_context"]
+
+        top = eng.optimize_locations(category="clinic", top_k=3, grid_size=4)
+        assert len(top) >= 1 and top[0]["parcel_id"] is not None
+        best_pid = top[0]["parcel_id"]
+
+        eng.set_parcel_ownership(best_pid, "BLOCKED_OWNERSHIP", "Shared heirs dispute")
+        top_after = eng.optimize_locations(category="clinic", top_k=3, grid_size=4)
+        assert all(c["parcel_id"] != best_pid for c in top_after)
+
+        dec = eng.commit_agent_decision(best_pid, "clinic", "REJECTED", "Shared heirs dispute", actor="mcp_agent")
+        assert dec["status"] == "REJECTED"
+        decisions = eng.list_agent_decisions()
+        assert any(d["id"] == dec["id"] and d["parcel_id"] == best_pid for d in decisions)
+
+    with UrbanGraphEngine(Path("data/manhattan-midtown.rl"), read_only=True) as m_eng:
+        assert m_eng.has_elevation
+        assert len(m_eng.env_zones) >= 50
+        sim_day = m_eng.simulate_injection(40.7536, -73.9832, category="cafe", time_of_day="midday", monte_carlo_runs=30)
+        sim_night = m_eng.simulate_injection(40.7536, -73.9832, category="cafe", time_of_day="late_night", monte_carlo_runs=30)
+        assert sim_day["relate_transaction"]["tx_state"] == "READ_ONLY_CONTEXT"
+        assert sim_day["parcel_context"]["parcel_id"] is not None
+        assert sim_day["monte_carlo_envelope"]["p50_base"] > sim_night["monte_carlo_envelope"]["p50_base"]

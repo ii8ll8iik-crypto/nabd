@@ -21,7 +21,13 @@ DB_PATH = Path(__file__).resolve().parents[1] / "data" / "irbid-yarmouk.rl"
 @pytest.fixture(scope="module")
 def engine() -> UrbanGraphEngine:
     assert DB_PATH.exists(), f"Missing Relate DB at {DB_PATH}"
-    return UrbanGraphEngine(DB_PATH)
+    import shutil, tempfile
+    from pathlib import Path as _Path
+    with tempfile.TemporaryDirectory() as td:
+        tmp_db = _Path(td) / _Path(DB_PATH).name
+        shutil.copy2(DB_PATH, tmp_db)
+        with UrbanGraphEngine(tmp_db) as eng:
+            yield eng
 
 
 def test_relate_graph_loaded(engine: UrbanGraphEngine) -> None:

@@ -136,9 +136,9 @@ class RelateClient:
         payload: Optional[Dict[str, Any]] = None,
         timeout_s: float = 30.0,
     ) -> Tuple[int, Dict[str, Any]]:
-        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        data = json.dumps(payload).encode("utf-8") if payload is not None else (b"" if method == "POST" else None)
         headers = {"Accept": "application/json"}
-        if data is not None:
+        if data is not None or method == "POST":
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
         try:
