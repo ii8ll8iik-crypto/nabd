@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Ban,
   Building2,
@@ -29,7 +30,7 @@ export function ToolRail({
   onResetSandbox,
 }: Props) {
   const isAr = lang === "ar";
-  const tools: { id: MapTool; en: string; ar: string; icon: JSX.Element; accent: string }[] = [
+  const tools: { id: MapTool; en: string; ar: string; icon: ReactNode; accent: string }[] = [
     { id: "inject", en: "Inject & Drag", ar: "زرع وسحب", icon: <Target size={15} />, accent: "cyan" },
     { id: "paint", en: "Reality Brush", ar: "فرشاة السكان", icon: <Paintbrush size={15} />, accent: "violet" },
     { id: "close_road", en: "Close Road", ar: "إغلاق طريق", icon: <Ban size={15} />, accent: "rose" },

@@ -120,7 +120,7 @@ Standard LLMs cannot compute shortest paths on a 1,000-junction street graph or 
 
 ### Installation & One-Command Launch
 ```bash
-git clone <your-repo-url> nabd
+git clone https://github.com/ii8ll8iik-crypto/nabd.git nabd
 cd nabd
 
 # Backend setup
