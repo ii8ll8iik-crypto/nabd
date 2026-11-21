@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 470" width="1120" height="470">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#050814"/>
+      <stop offset="100%" stop-color="#0b1224"/>
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="greenGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00e699"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="violetGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#ec4899"/>
+    </linearGradient>
+    <marker id="arrowCyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#00e699"/>
+    </marker>
+    <marker id="arrowViolet" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#c084fc"/>
+    </marker>
+  </defs>
+
+  <rect width="1120" height="470" rx="18" fill="url(#bg)" stroke="#1e293b" stroke-width="1.5"/>
+
+  <!-- Subtle Grid -->
+  <g stroke="#1e293b" stroke-opacity="0.35" stroke-width="1">
+    <line x1="0" y1="90" x2="1120" y2="90"/>
+    <line x1="365" y1="90" x2="365" y2="470"/>
+    <line x1="765" y1="90" x2="765" y2="470"/>
+  </g>
+
+  <!-- Header -->
+  <text x="36" y="42" fill="#f8fafc" font-family="Inter, system-ui, sans-serif" font-size="22" font-weight="800" letter-spacing="0.6">
+    NABD · نبض  —  SYSTEM ARCHITECTURE & MULTI-HOP DATAFLOW
+  </text>
+  <text x="36" y="68" fill="#94a3b8" font-family="Inter, system-ui, sans-serif" font-size="13">
+    Constructive Urban Physics on Relate (.rl) · Grounded Zero-Hallucination AI · Human-in-the-Loop Spatial Calibration
+  </text>
+  <rect x="910" y="26" width="174" height="32" rx="16" fill="#0f172a" stroke="#22d3ee" stroke-opacity="0.5"/>
+  <text x="997" y="47" text-anchor="middle" fill="#67e8f9" font-family="monospace" font-size="12" font-weight="700">12/12 PYTEST · 0.91s</text>
+
+  <!-- COLUMN 1: WORLD INGESTION & RELATE -->
+  <text x="36" y="122" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="700">01 · LIVE WORLD & RELATE GRAPH</text>
+
+  <rect x="36" y="138" width="295" height="84" rx="12" fill="#0f172a" stroke="#334155"/>
+  <text x="54" y="163" fill="#f8fafc" font-family="Inter, sans-serif" font-size="14" font-weight="700">Live Global Data Streams</text>
+  <text x="54" y="184" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• OpenStreetMap: Streets, 3D Blocks, POIs</text>
+  <text x="54" y="203" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• Open-Meteo DEM + Parks, Water, Tourism</text>
+
+  <line x1="183" y1="222" x2="183" y2="250" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrowCyan)"/>
+
+  <rect x="36" y="256" width="295" height="106" rx="12" fill="#0d1b2a" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="54" y="281" fill="#67e8f9" font-family="Inter, sans-serif" font-size="14" font-weight="700">Relate (.rl) Single-File Graph DB</text>
+  <text x="54" y="302" fill="#e2e8f0" font-family="monospace" font-size="11">(:Block)-[:ACCESSES]->(:Junction)</text>
+  <text x="54" y="320" fill="#e2e8f0" font-family="monospace" font-size="11">(:Junction)-[:STREET]->(:Junction)</text>
+  <text x="54" y="338" fill="#e2e8f0" font-family="monospace" font-size="11">(:Service)-[:LOCATED_ON]->(:Junction)</text>
+  <text x="54" y="354" fill="#94a3b8" font-family="monospace" font-size="10.5">(:ServiceType)-[:SYNERGIZES_WITH]->(...)</text>
+
+  <rect x="36" y="378" width="295" height="68" rx="12" fill="#171226" stroke="#a855f7" stroke-opacity="0.7"/>
+  <text x="54" y="401" fill="#e9d5ff" font-family="Inter, sans-serif" font-size="13" font-weight="700">Human-in-the-Loop Overrides</text>
+  <text x="54" y="421" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11">Reality Brush · Any Facility DNA · Road Closures</text>
+  <text x="54" y="437" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11">Demolitions · Population Surges (+1,500)</text>
+
+  <!-- Connector Col 1 -> Col 2 -->
+  <line x1="331" y1="309" x2="392" y2="265" stroke="#00e699" stroke-width="2.2" marker-end="url(#arrowGreen)"/>
+  <line x1="331" y1="412" x2="392" y2="345" stroke="#c084fc" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrowViolet)"/>
+
+  <!-- COLUMN 2: 7-LAW PHYSICS KERNEL -->
+  <text x="398" y="122" fill="#00e699" font-family="monospace" font-size="12" font-weight="700">02 · 7-LAW URBAN PHYSICS KERNEL (NUMPY/SCIPY)</text>
+
+  <rect x="398" y="138" width="335" height="308" rx="14" fill="#091522" stroke="#00e699" stroke-opacity="0.65" stroke-width="1.5"/>
+
+  <g font-family="Inter, sans-serif">
+    <rect x="414" y="154" width="303" height="36" rx="8" fill="#0f2334" stroke="#1e3a5f"/>
+    <text x="426" y="177" fill="#67e8f9" font-size="12" font-weight="700">Law 1 · Dijkstra + Tobler Slope Walk & Circuity</text>
+
+    <rect x="414" y="196" width="303" height="36" rx="8" fill="#0f2334" stroke="#1e3a5f"/>
+    <text x="426" y="219" fill="#00e699" font-size="12" font-weight="700">Law 2 · Huff Gravity + Outside Option (U₀)</text>
+
+    <rect x="414" y="238" width="303" height="36" rx="8" fill="#0f2334" stroke="#1e3a5f"/>
+    <text x="426" y="261" fill="#34d399" font-size="12" font-weight="700">Law 3 · E2SFCA Equity & Unlocked Residents</text>
+
+    <rect x="414" y="280" width="303" height="36" rx="8" fill="#0f2334" stroke="#1e3a5f"/>
+    <text x="426" y="303" fill="#fbbf24" font-size="12" font-weight="700">Law 4 · Leontief Induced Synergy (Hop 3)</text>
+
+    <rect x="414" y="322" width="303" height="36" rx="8" fill="#0f2334" stroke="#1e3a5f"/>
+    <text x="426" y="345" fill="#fb7185" font-size="12" font-weight="700">Law 5 · BPR Non-Linear Congestion (Hop 4)</text>
+
+    <rect x="414" y="364" width="303" height="32" rx="8" fill="#0f2334" stroke="#1e3a5f"/>
+    <text x="426" y="385" fill="#c084fc" font-size="11.5" font-weight="700">Law 6 · Constrained Optimizer + Eco-Zoning</text>
+
+    <rect x="414" y="402" width="303" height="32" rx="8" fill="#0f2334" stroke="#1e3a5f"/>
+    <text x="426" y="423" fill="#e2e8f0" font-size="11.5" font-weight="700">Law 7 · 200-World Monte Carlo (P10 / P50 / P90)</text>
+  </g>
+
+  <!-- Connector Col 2 -> Col 3 -->
+  <line x1="733" y1="220" x2="792" y2="200" stroke="#22d3ee" stroke-width="2.2" marker-end="url(#arrowCyan)"/>
+  <line x1="733" y1="340" x2="792" y2="365" stroke="#c084fc" stroke-width="2.2" marker-end="url(#arrowViolet)"/>
+
+  <!-- COLUMN 3: INTERFACES & GROUNDED AI -->
+  <text x="798" y="122" fill="#c084fc" font-family="monospace" font-size="12" font-weight="700">03 · STUDIO & ZERO-HALLUCINATION AI</text>
+
+  <rect x="798" y="138" width="286" height="142" rx="12" fill="#0f172a" stroke="#22d3ee" stroke-opacity="0.7"/>
+  <text x="816" y="164" fill="#f8fafc" font-family="Inter, sans-serif" font-size="14" font-weight="700">3D Bilingual Cyber Studio</text>
+  <text x="816" y="185" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• React + TypeScript + MapLibre GL JS</text>
+  <text x="816" y="204" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• Cyber 3D · Satellite · Topographic Relief</text>
+  <text x="816" y="223" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• Live Drag Scrubbing + A/B Pin Comparison</text>
+  <text x="816" y="242" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• 1-Click EN / العربية (LTR ↔ RTL)</text>
+  <text x="816" y="263" fill="#67e8f9" font-family="monospace" font-size="10.5">FastAPI Async REST (:8001)</text>
+
+  <rect x="798" y="298" width="286" height="148" rx="12" fill="#161026" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="816" y="324" fill="#e9d5ff" font-family="Inter, sans-serif" font-size="14" font-weight="700">Grounded AI Strategist + MCP</text>
+  <text x="816" y="346" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• MCP Server (SDK 2.x) — 7 Grounded Tools</text>
+  <text x="816" y="365" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">• Hybrid Engine: Free Local + Gemini/OpenAI</text>
+  <text x="816" y="384" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="11.5">  Claude / DeepSeek / Groq / OpenRouter / Ollama</text>
+  <text x="816" y="405" fill="#00e699" font-family="Inter, sans-serif" font-size="11.5" font-weight="600">• Computes Physics First → Narrates Second</text>
+  <text x="816" y="427" fill="#94a3b8" font-family="monospace" font-size="10.5">Read-Only Cypher Guardrail Enforced</text>
+</svg>

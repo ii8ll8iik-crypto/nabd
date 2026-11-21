@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+data/cache/
+data/live_*.rl
+data/raw/live_*
+data/raw/*.osm.json
+!data/raw/irbid-yarmouk.osm.json
+.env
+.DS_Store
+*.log
