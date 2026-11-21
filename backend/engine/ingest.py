@@ -39,6 +39,12 @@ PRESETS: Dict[str, Dict[str, Any]] = {
         "lon": 35.8500,
         "radius_m": 850,
     },
+    "manhattan-midtown": {
+        "label": "Manhattan — Midtown & Bryant Park (NYC)",
+        "lat": 40.7536,
+        "lon": -73.9832,
+        "radius_m": 650,
+    },
     "barcelona-eixample": {
         "label": "Barcelona — Eixample",
         "lat": 41.3917,
@@ -374,92 +380,9 @@ def parse_osm_to_payload(
     }
 
 
-def materialize_relate_db(payload_path: Path, db_path: Path) -> None:
-    if db_path.exists():
-        db_path.unlink()
-
-    cypher = """
-    CREATE (:Meta {
-      slug: $data.meta.slug,
-      label: $data.meta.label,
-      center_lat: $data.meta.center_lat,
-      center_lon: $data.meta.center_lon,
-      radius_m: $data.meta.radius_m,
-      synced_at: $data.meta.synced_at,
-      total_est_pop: $data.meta.total_est_pop
-    });
-
-    UNWIND $data.service_types AS st
-    CREATE (:ServiceType {
-      key: st.key,
-      label_en: st.label_en,
-      label_ar: st.label_ar,
-      beta_decay: st.beta_decay,
-      alpha_attraction: st.alpha_attraction,
-      base_attraction: st.base_attraction,
-      outside_option: st.outside_option,
-      ideal_walk_min: st.ideal_walk_min,
-      daily_capacity: st.daily_capacity,
-      demand_per_1k_pop: st.demand_per_1k_pop
-    });
-
-    UNWIND $data.synergies AS syn
-    MATCH (a:ServiceType {key: syn.src}), (b:ServiceType {key: syn.dst})
-    CREATE (a)-[:SYNERGIZES_WITH {multiplier: syn.multiplier, decay_gamma: syn.decay_gamma}]->(b);
-
-    UNWIND $data.junctions AS j
-    CREATE (:Junction {id: j.id, lat: j.lat, lon: j.lon});
-
-    UNWIND $data.streets AS s
-    MATCH (a:Junction {id: s.src}), (b:Junction {id: s.dst})
-    CREATE (a)-[:STREET {
-      length_m: s.length_m,
-      walk_min: s.walk_min,
-      drive_min: s.drive_min,
-      highway: s.highway,
-      capacity: s.capacity,
-      oneway: s.oneway
-    }]->(b);
-
-    UNWIND $data.blocks AS b
-    MATCH (j:Junction {id: b.junction_id})
-    CREATE (blk:Block {
-      id: b.id,
-      lat: b.lat,
-      lon: b.lon,
-      area_m2: b.area_m2,
-      levels: b.levels,
-      est_pop: b.est_pop,
-      kind: b.kind
-    })-[:ACCESSES {euclid_m: b.snap_m, walk_min: b.snap_walk_min}]->(j);
-
-    UNWIND $data.services AS sv
-    MATCH (j:Junction {id: sv.junction_id}), (st:ServiceType {key: sv.category})
-    CREATE (s:Service {
-      id: sv.id,
-      name: sv.name,
-      category: sv.category,
-      lat: sv.lat,
-      lon: sv.lon,
-      attraction: sv.attraction,
-      capacity: sv.capacity
-    })-[:LOCATED_ON {euclid_m: sv.snap_m, walk_min: sv.snap_walk_min}]->(j),
-    (s)-[:OF_TYPE]->(st);
-    """
-
-    cmd = [
-        "relate",
-        "-d",
-        str(db_path),
-        "--expression-memory-limit",
-        "none",
-        "--fetch-params",
-        f"data={payload_path}",
-        "query",
-    ]
-    res = subprocess.run(cmd, input=cypher, text=True, capture_output=True)
-    if res.returncode != 0:
-        raise RuntimeError(f"Relate build failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+def materialize_relate_db(payload: Dict[str, Any], db_path: Path) -> Dict[str, Any]:
+    from backend.relate_core.builder import materialize_relate_v2
+    return materialize_relate_v2(payload, db_path)
 
 
 def ingest_area(
@@ -470,28 +393,32 @@ def ingest_area(
     radius_m: float = 850,
     force: bool = False,
 ) -> Dict[str, Any]:
+    from backend.relate_core.builder import enrich_payload_v2, materialize_relate_v2
+
     raw_path = DATA_DIR / "raw" / f"{slug}.osm.json"
-    payload_path = DATA_DIR / "cache" / f"{slug}.payload.json"
     db_path = DATA_DIR / f"{slug}.rl"
 
     bbox = bbox_from_center(lat, lon, radius_m)
     raw = fetch_overpass(bbox, raw_path, force=force)
-    payload = parse_osm_to_payload(raw, slug, label, lat, lon, radius_m)
-
-    payload_path.parent.mkdir(parents=True, exist_ok=True)
-    payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    base_payload = parse_osm_to_payload(raw, slug, label, lat, lon, radius_m)
+    payload = enrich_payload_v2(base_payload, slug)
 
     print(
-        f"[ingest] Parsed {len(payload['junctions'])} junctions, "
-        f"{len(payload['streets'])} directed street edges, "
-        f"{len(payload['blocks'])} demand blocks (~{payload['meta']['total_est_pop']:,} residents), "
-        f"{len(payload['services'])} real services."
+        f"[ingest:v2] Parsed {len(payload['junctions'])} junctions, "
+        f"{len(payload['streets'])} streets, "
+        f"{len(payload['parcels'])} 3D parcels "
+        f"(day={payload['meta']['total_day_pop']:,}, night={payload['meta']['total_night_pop']:,}), "
+        f"{len(payload['services'])} services, {len(payload['env_zones'])} env zones."
     )
-    print(f"[ingest] Materializing Relate database -> {db_path} ...")
-    materialize_relate_db(payload_path, db_path)
-    print(f"[ingest] Done! Built {db_path} ({db_path.stat().st_size / 1024:.1f} KB)")
+    print(f"[ingest:v2] Materializing indexed Relate v2 store -> {db_path} ...")
+    receipt = materialize_relate_v2(payload, db_path)
+    print(
+        f"[ingest:v2] Done! {db_path.name} ({receipt['total_bytes'] / 1024:.1f} KB, "
+        f"nodes={receipt['relate_store_info']['node_count']}, "
+        f"rels={receipt['relate_store_info']['rel_count']}, "
+        f"sha256={receipt['sha256'][:12]}...)"
+    )
     return payload["meta"]
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest live OpenStreetMap area into a Relate (.rl) graph.")

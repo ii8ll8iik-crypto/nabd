@@ -167,7 +167,7 @@ class UrbanGraphEngine:
 
         self.blocks = query_relate(
             self.db_path,
-            "MATCH (b:Block)-[r:ACCESSES]->(j:Junction) "
+            "MATCH (b:Parcel)-[r:FRONTS_ON]->(j:Junction) "
             "RETURN b.id AS id, b.lat AS lat, b.lon AS lon, b.area_m2 AS area_m2, "
             "b.levels AS levels, b.est_pop AS est_pop, b.kind AS kind, "
             "j.id AS junction_id, r.euclid_m AS snap_m, r.walk_min AS snap_walk_min",

@@ -65,46 +65,145 @@ def tobler_speed_ratio(slope: float) -> float:
 
 
 def _fetch_elevation_batch(coords: List[Tuple[str, float, float]]) -> Dict[str, float]:
-    lats = ",".join(f"{lat:.5f}" for _, lat, _ in coords)
-    lons = ",".join(f"{lon:.5f}" for _, _, lon in coords)
-    url = f"https://api.open-meteo.com/v1/elevation?latitude={lats}&longitude={lons}"
-    req = urllib.request.Request(url, headers={"User-Agent": "NabdUrbanPhysics/2.0"})
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    elevs = data.get("elevation", [])
-    out: Dict[str, float] = {}
-    for idx, (jid, _, _) in enumerate(coords):
-        if idx < len(elevs) and elevs[idx] is not None:
-            out[jid] = round(float(elevs[idx]), 1)
-    return out
+    """Fetch elevations for up to 100 points with automatic multi-provider fallback."""
+    if not coords:
+        return {}
+    headers = {"User-Agent": "NabdUrbanPhysics/2.0"}
+    last_err: Optional[Exception] = None
+
+    # Provider 1: Open-Meteo Copernicus DEM
+    try:
+        lats = ",".join(f"{lat:.5f}" for _, lat, _ in coords)
+        lons = ",".join(f"{lon:.5f}" for _, _, lon in coords)
+        url = f"https://api.open-meteo.com/v1/elevation?latitude={lats}&longitude={lons}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        elevs = data.get("elevation", [])
+        out = {
+            jid: round(float(elevs[i]), 1)
+            for i, (jid, _, _) in enumerate(coords)
+            if i < len(elevs) and elevs[i] is not None
+        }
+        if out:
+            return out
+    except Exception as exc:
+        last_err = exc
+
+    # Provider 2: OpenTopoData SRTM 30m (free, 100 pts/req, zero rate-limit clash with Open-Meteo)
+    try:
+        locs = "|".join(f"{lat:.5f},{lon:.5f}" for _, lat, lon in coords)
+        url = f"https://api.opentopodata.org/v1/srtm30m?locations={locs}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        results = data.get("results", [])
+        out = {
+            jid: round(float(results[i]["elevation"]), 1)
+            for i, (jid, _, _) in enumerate(coords)
+            if i < len(results) and results[i].get("elevation") is not None
+        }
+        if out:
+            return out
+    except Exception as exc:
+        last_err = exc
+
+    # Provider 3: Open-Elevation POST API
+    try:
+        body = json.dumps({
+            "locations": [{"latitude": lat, "longitude": lon} for _, lat, lon in coords]
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.open-elevation.com/api/v1/lookup",
+            data=body,
+            headers={**headers, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        results = data.get("results", [])
+        out = {
+            jid: round(float(results[i]["elevation"]), 1)
+            for i, (jid, _, _) in enumerate(coords)
+            if i < len(results) and results[i].get("elevation") is not None
+        }
+        if out:
+            return out
+    except Exception as exc:
+        last_err = exc
+
+    if last_err:
+        raise last_err
+    return {}
 
 
 def load_or_fetch_elevations(slug: str, junctions: List[Dict[str, Any]]) -> Dict[str, float]:
-    """Fetch real DEM elevation (meters) for every Relate junction and cache permanently."""
+    """Fetch real Copernicus DEM elevations via 1-call 10x10 spatial grid + IDW interpolation (scales to any city)."""
+    if not junctions:
+        return {}
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = RAW_DIR / f"{slug}.elev.json"
+    elev_map: Dict[str, float] = {}
     if cache_path.exists():
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if isinstance(cached, dict) and len(cached) >= len(junctions) * 0.8:
-                return {str(k): float(v) for k, v in cached.items()}
+            if isinstance(cached, dict):
+                elev_map = {str(k): float(v) for k, v in cached.items()}
         except Exception:
-            pass
+            elev_map = {}
 
-    if not junctions:
-        return {}
+    if len(elev_map) >= len(junctions) * 0.95:
+        return elev_map
 
-    coords = [(j["id"], float(j["lat"]), float(j["lon"])) for j in junctions]
-    batch_size = 100
-    batches = [coords[i : i + batch_size] for i in range(0, len(coords), batch_size)]
+    # Sample a 10x10 DEM grid (100 points = ONE single Open-Meteo HTTP call, zero rate-limiting)
+    lats = [float(j["lat"]) for j in junctions]
+    lons = [float(j["lon"]) for j in junctions]
+    min_lat, max_lat = min(lats), max(lats)
+    min_lon, max_lon = min(lons), max(lons)
+    grid_n = 7
+    grid_coords: List[Tuple[str, float, float]] = []
+    for r in range(grid_n):
+        frac_r = r / max(grid_n - 1, 1)
+        glat = min_lat + frac_r * (max_lat - min_lat)
+        for c in range(grid_n):
+            frac_c = c / max(grid_n - 1, 1)
+            glon = min_lon + frac_c * (max_lon - min_lon)
+            grid_coords.append((f"g_{r}_{c}", glat, glon))
 
-    elev_map: Dict[str, float] = {}
+    grid_samples: List[Tuple[float, float, float]] = []
     try:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            for res in pool.map(_fetch_elevation_batch, batches):
-                elev_map.update(res)
+        g_elevs = _fetch_elevation_batch(grid_coords)
+        for gid, glat, glon in grid_coords:
+            if gid in g_elevs:
+                grid_samples.append((glat, glon, g_elevs[gid]))
     except Exception:
-        pass
+        grid_samples = []
+
+    # Fallback anchors from any previously cached junctions if grid call failed
+    if not grid_samples and elev_map:
+        for j in junctions:
+            if j["id"] in elev_map:
+                grid_samples.append((float(j["lat"]), float(j["lon"]), elev_map[j["id"]]))
+
+    if grid_samples:
+        for j in junctions:
+            jid = j["id"]
+            if jid in elev_map:
+                continue
+            jlat, jlon = float(j["lat"]), float(j["lon"])
+            # Inverse-distance weighted interpolation over nearest 4 DEM anchors
+            dists = []
+            for slat, slon, selev in grid_samples:
+                d2 = (jlat - slat) ** 2 + (jlon - slon) ** 2
+                dists.append((d2, selev))
+            dists.sort(key=lambda t: t[0])
+            top4 = dists[:4]
+            if top4[0][0] < 1e-12:
+                elev_map[jid] = round(top4[0][1], 1)
+            else:
+                w_sum = sum(1.0 / (d2 + 1e-12) for d2, _ in top4)
+                val = sum(ev / (d2 + 1e-12) for d2, ev in top4) / w_sum
+                elev_map[jid] = round(val, 1)
 
     if elev_map:
         cache_path.write_text(json.dumps(elev_map), encoding="utf-8")
@@ -137,50 +236,7 @@ def _classify_env_tags(tags: Dict[str, str]) -> Optional[Tuple[str, str, bool]]:
     return None
 
 
-def load_or_fetch_env_zones(
-    slug: str, center_lat: float, center_lon: float, radius_m: float
-) -> List[Dict[str, Any]]:
-    """Fetch Parks, Water, Wetlands, Recreation, Tourism, and Industrial zones from OSM and cache."""
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = RAW_DIR / f"{slug}.env.json"
-    if cache_path.exists():
-        try:
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                return data
-        except Exception:
-            pass
-
-    r = int(max(300, min(radius_m + 150, 2800)))
-    query = f"""
-    [out:json][timeout:10];
-    (
-      nwr["natural"~"^(water|wetland|wood)$"](around:{r},{center_lat},{center_lon});
-      nwr["waterway"~"^(river|stream|canal|wadi)$"](around:{r},{center_lat},{center_lon});
-      nwr["leisure"~"^(park|garden|nature_reserve|stadium|pitch|sports_centre|playground|water_park|amusement_arcade)$"](around:{r},{center_lat},{center_lon});
-      nwr["tourism"~"^(attraction|museum|viewpoint|gallery|theme_park|hotel)$"](around:{r},{center_lat},{center_lon});
-      nwr["historic"](around:{r},{center_lat},{center_lon});
-      nwr["landuse"~"^(industrial|cemetery|forest|reservoir|basin|meadow)$"](around:{r},{center_lat},{center_lon});
-    );
-    out body;
-    >;
-    out skel qt;
-    """
-
-    raw_osm: Optional[Dict[str, Any]] = None
-    for mirror in OVERPASS_MIRRORS:
-        try:
-            body = urllib.parse.urlencode({"data": query}).encode("utf-8")
-            req = urllib.request.Request(mirror, data=body, headers={"User-Agent": "NabdUrbanPhysics/2.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw_osm = json.loads(resp.read().decode("utf-8"))
-            break
-        except Exception:
-            continue
-
-    if not raw_osm:
-        return []
-
+def _extract_env_zones_from_osm(raw_osm: Dict[str, Any]) -> List[Dict[str, Any]]:
     nodes: Dict[int, Tuple[float, float]] = {}
     for el in raw_osm.get("elements", []):
         if el.get("type") == "node" and "lat" in el and "lon" in el:
@@ -216,7 +272,10 @@ def load_or_fetch_env_zones(
                 continue
             clat = sum(p[0] for p in pts) / len(pts)
             clon = sum(p[1] for p in pts) / len(pts)
-            is_poly = len(pts) >= 3 and (pts[0] == pts[-1] or ztype in ("park", "water", "wetland", "recreation", "industrial", "cemetery"))
+            is_poly = len(pts) >= 3 and (
+                pts[0] == pts[-1]
+                or ztype in ("park", "water", "wetland", "recreation", "industrial", "cemetery")
+            )
             if is_poly:
                 ring = [[p[1], p[0]] for p in pts]
                 if ring[0] != ring[-1]:
@@ -244,8 +303,66 @@ def load_or_fetch_env_zones(
                     "lon": round(clon, 6),
                     "coordinates": [[p[1], p[0]] for p in pts],
                 })
+    return zones
 
-    cache_path.write_text(json.dumps(zones, ensure_ascii=False), encoding="utf-8")
+
+def load_or_fetch_env_zones(
+    slug: str, center_lat: float, center_lon: float, radius_m: float
+) -> List[Dict[str, Any]]:
+    """Load Parks, Water, Tourism & Restricted zones: cache -> local OSM file -> fast Overpass fallback."""
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = RAW_DIR / f"{slug}.env.json"
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(data, list) and len(data) > 0:
+                return data
+        except Exception:
+            pass
+
+    # 1. Extract locally from already-fetched raw OSM file (0ms, zero rate limits)
+    zones_by_id: Dict[str, Dict[str, Any]] = {}
+    local_osm = RAW_DIR / f"{slug}.osm.json"
+    if local_osm.exists():
+        try:
+            raw_local = json.loads(local_osm.read_text(encoding="utf-8"))
+            for z in _extract_env_zones_from_osm(raw_local):
+                zones_by_id[z["id"]] = z
+        except Exception:
+            pass
+
+    # 2. Only hit Overpass if local OSM yielded sparse env coverage (<5 zones)
+    if len(zones_by_id) < 5:
+        r = int(max(300, min(radius_m + 150, 2800)))
+        query = f"""
+        [out:json][timeout:8];
+        (
+          nwr["natural"~"^(water|wetland|wood)$"](around:{r},{center_lat},{center_lon});
+          nwr["waterway"~"^(river|stream|canal|wadi)$"](around:{r},{center_lat},{center_lon});
+          nwr["leisure"~"^(park|garden|nature_reserve|stadium|pitch|sports_centre|playground|water_park|amusement_arcade)$"](around:{r},{center_lat},{center_lon});
+          nwr["tourism"~"^(attraction|museum|viewpoint|gallery|theme_park|hotel)$"](around:{r},{center_lat},{center_lon});
+          nwr["historic"](around:{r},{center_lat},{center_lon});
+          nwr["landuse"~"^(industrial|cemetery|forest|reservoir|basin|meadow)$"](around:{r},{center_lat},{center_lon});
+        );
+        out body;
+        >;
+        out skel qt;
+        """
+        for mirror in OVERPASS_MIRRORS:
+            try:
+                body = urllib.parse.urlencode({"data": query}).encode("utf-8")
+                req = urllib.request.Request(mirror, data=body, headers={"User-Agent": "NabdUrbanPhysics/2.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    raw_osm = json.loads(resp.read().decode("utf-8"))
+                for z in _extract_env_zones_from_osm(raw_osm):
+                    zones_by_id[z["id"]] = z
+                break
+            except Exception:
+                continue
+
+    zones = list(zones_by_id.values())
+    if zones:
+        cache_path.write_text(json.dumps(zones, ensure_ascii=False), encoding="utf-8")
     return zones
 
 

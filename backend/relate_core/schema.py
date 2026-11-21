@@ -9,11 +9,11 @@ if TYPE_CHECKING:
 
 # Unique constraints in Relate automatically create backing indexes.
 SCHEMA_CONSTRAINTS: List[str] = [
-    "CREATE CONSTRAINT meta_key_uniq IF NOT EXISTS FOR (m:Meta) REQUIRE m.key IS UNIQUE",
+    "CREATE CONSTRAINT meta_slug_uniq IF NOT EXISTS FOR (m:Meta) REQUIRE m.slug IS UNIQUE",
     "CREATE CONSTRAINT junction_id_uniq IF NOT EXISTS FOR (j:Junction) REQUIRE j.id IS UNIQUE",
     "CREATE CONSTRAINT parcel_id_uniq IF NOT EXISTS FOR (p:Parcel) REQUIRE p.id IS UNIQUE",
     "CREATE CONSTRAINT service_id_uniq IF NOT EXISTS FOR (s:Service) REQUIRE s.id IS UNIQUE",
-    "CREATE CONSTRAINT service_type_id_uniq IF NOT EXISTS FOR (t:ServiceType) REQUIRE t.id IS UNIQUE",
+    "CREATE CONSTRAINT service_type_key_uniq IF NOT EXISTS FOR (t:ServiceType) REQUIRE t.key IS UNIQUE",
     "CREATE CONSTRAINT env_zone_id_uniq IF NOT EXISTS FOR (z:EnvZone) REQUIRE z.id IS UNIQUE",
     "CREATE CONSTRAINT agent_decision_id_uniq IF NOT EXISTS FOR (d:AgentDecision) REQUIRE d.id IS UNIQUE",
 ]

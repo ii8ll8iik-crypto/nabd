@@ -1,0 +1,51 @@
+{
+  "schema_version": "2.0",
+  "slug": "manhattan-midtown",
+  "label": "Manhattan — Midtown & Bryant Park (NYC)",
+  "built_at": "2026-11-21T20:45:39.042678+00:00",
+  "store_file": "manhattan-midtown.rl",
+  "sha256": "45c30d999c90ad77968c0f27a36a9f85164bbce598fbfcfb996d2a22408ff7a3",
+  "total_bytes": 6746112,
+  "sources": {
+    "topology_and_buildings": "OpenStreetMap via Overpass API",
+    "elevation_dem": "Open-Meteo Copernicus DEM",
+    "environmental_zones": "OpenStreetMap Parks/Water/Tourism/Campus"
+  },
+  "counts": {
+    "junctions": 3178,
+    "streets": 9374,
+    "parcels": 1297,
+    "services": 622,
+    "env_zones": 97,
+    "near_zone_edges": 9003
+  },
+  "volumetric": {
+    "total_gfa_m2": 3349262.9,
+    "total_day_pop": 93504,
+    "total_night_pop": 59649,
+    "total_est_pop": 90412,
+    "min_elev_m": 12.3,
+    "max_elev_m": 76.0,
+    "parcel_suitability": {
+      "storefront_lease": 159,
+      "mixed_ground_floor": 535,
+      "residential_only": 596,
+      "institutional": 4,
+      "vacant_buildable": 3
+    }
+  },
+  "relate_store_info": {
+    "node_count": 5206,
+    "rel_count": 20944,
+    "constraints": [],
+    "indexes": [],
+    "codec": "parquet",
+    "format_version": 5
+  },
+  "schema_report": {
+    "constraints_checked": 7,
+    "constraints_applied": 7,
+    "indexes_checked": 6,
+    "indexes_applied": 6
+  }
+}
