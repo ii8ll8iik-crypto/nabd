@@ -1464,14 +1464,38 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
   }
 }
 
-
 /* NABD AI STRATEGIST LAYOUT & QUICK-ROW SCROLL FIX */
 @media (min-width: 769px) {
-  .ai-float-shell {
+  .ai-float-shell.open {
+    top: 112px !important;
+    bottom: 118px !important;
     width: min(560px, calc(100vw - 680px)) !important;
     min-width: 450px;
     max-width: calc(100vw - 80px) !important;
-    max-height: calc(100vh - 165px) !important;
+    height: auto !important;
+    max-height: calc(100vh - 230px) !important;
+    min-height: 320px;
+  }
+
+  .ai-card {
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .ai-header,
+  .ai-settings,
+  .ai-quick-row,
+  .ai-input-row {
+    flex-shrink: 0 !important;
+  }
+
+  .ai-messages {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
   }
 
   .ai-bubble {
@@ -1504,6 +1528,7 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
     display: flex !important;
     flex-direction: column !important;
     height: 100% !important;
+    min-height: 0 !important;
     overflow: hidden !important;
   }
 
