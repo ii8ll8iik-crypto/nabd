@@ -66,6 +66,33 @@ function fastDistM(lat1: number, lon1: number, lat2: number, lon2: number): numb
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+function buildCurvedArc(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+  archHeight = 0.24,
+  steps = 22
+): number[][] {
+  const dx = lon2 - lon1;
+  const dy = lat2 - lat1;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+  const nx = -dy / dist;
+  const ny = dx / dist;
+  const midLon = (lon1 + lon2) * 0.5 + nx * dist * archHeight;
+  const midLat = (lat1 + lat2) * 0.5 + ny * dist * archHeight;
+  const pts: number[][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const u = 1 - t;
+    pts.push([
+      u * u * lon1 + 2 * u * t * midLon + t * t * lon2,
+      u * u * lat1 + 2 * u * t * midLat + t * t * lat2,
+    ]);
+  }
+  return pts;
+}
+
 export default function App() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
@@ -90,6 +117,7 @@ export default function App() {
   const [traceRefresh, setTraceRefresh] = useState(0);
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionFeedback, setDecisionFeedback] = useState<string | null>(null);
+  const [flightBanner, setFlightBanner] = useState<string | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [is3D, setIs3D] = useState(true);
   const [mapStyle, setMapStyle] = useState<MapStyleMode>("cyber");
@@ -202,9 +230,7 @@ export default function App() {
           if (servedSet.has(id)) {
             return { ...f, properties: { ...f.properties, height: origH, override_color: "#00d4ff" } };
           }
-          if (sharedSet.has(id)) {
-            return { ...f, properties: { ...f.properties, height: origH, override_color: "#f59e0b" } };
-          }
+          void sharedSet;
           if (sb.paintedZones.length > 0) {
             const rings = f.geometry.coordinates as number[][][];
             const pt = rings?.[0]?.[0];
@@ -309,10 +335,13 @@ export default function App() {
 
         updateMapSource("ripple-lines", {
           type: "FeatureCollection",
-          features: data.hop2_competitor_ripple.top_impacted.map((c) => ({
+          features: data.hop2_competitor_ripple.top_impacted.map((c, idx) => ({
             type: "Feature",
-            geometry: { type: "LineString", coordinates: [[lon, lat], [c.lon, c.lat]] },
-            properties: { name: c.name, loss: c.visits_lost },
+            geometry: {
+              type: "LineString",
+              coordinates: buildCurvedArc(lat, lon, c.lon, c.lat, idx % 2 === 0 ? 0.25 : -0.22),
+            },
+            properties: { kind: "competitor", name: c.name, loss: c.visits_lost },
           })),
         });
       } catch (err) {
@@ -370,6 +399,20 @@ export default function App() {
       .then(setCatalog)
       .catch(() => setErrorText("Cannot reach FastAPI physics server on port 8001."));
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current || typeof map.setLight !== "function") return;
+    if (timeOfDay === "night") {
+      map.setLight({ anchor: "viewport", color: "#818cf8", intensity: 0.32, position: [1.5, 210, 35] });
+    } else if (timeOfDay === "evening") {
+      map.setLight({ anchor: "viewport", color: "#fb923c", intensity: 0.44, position: [1.5, 240, 25] });
+    } else if (timeOfDay === "morning") {
+      map.setLight({ anchor: "viewport", color: "#fde68a", intensity: 0.52, position: [1.5, 110, 45] });
+    } else {
+      map.setLight({ anchor: "viewport", color: "#e0f2fe", intensity: 0.58, position: [1.5, 150, 65] });
+    }
+  }, [timeOfDay, activeSlug]);
 
   useEffect(() => {
     refresh3DBuildings(areaData, sandbox, simResult, timeOfDay);
@@ -721,6 +764,12 @@ export default function App() {
         paint: { "circle-radius": 9.5, "circle-color": "#e11d48", "circle-stroke-width": 2.5, "circle-stroke-color": "#ffffff" },
       });
 
+      map.addLayer({
+        id: "layer-ripple-glow",
+        type: "line",
+        source: "ripple-lines",
+        paint: { "line-color": "#f43f5e", "line-width": 7, "line-blur": 5, "line-opacity": 0.34 },
+      });
       map.addLayer({
         id: "layer-ripples",
         type: "line",
@@ -1171,6 +1220,11 @@ export default function App() {
   const runGuidedFlight = async (flight: "irbid_acid" | "manhattan_pulse" | "agent_memory") => {
     setErrorText(null);
     if (flight === "irbid_acid") {
+      setFlightBanner(
+        lang === "ar"
+          ? "رحلة 1/3 · مسح الوهم الطوبولوجي حول جامعة اليرموك وحقن عيادة بمعاملة ACID ROLLBACK..."
+          : "Proof Flight 1/3 · Exposing 1.6x+ topological illusions & executing live ACID ROLLBACK in Relate..."
+      );
       setLeftOpen(false);
       setRightOpen(true);
       setCategory("clinic");
@@ -1180,24 +1234,42 @@ export default function App() {
       await handleToggleIllusions(true, "clinic");
       await runSimulation(32.5365, 35.8555, { slug: "irbid-yarmouk", cat: "clinic", tod: "midday", custom: false });
       setRelateOpen(true);
+      setTimeout(() => setFlightBanner(null), 6500);
     } else if (flight === "manhattan_pulse") {
+      setFlightBanner(
+        lang === "ar"
+          ? "رحلة 2/3 · مانهاتن (Midtown): ذروة المكاتب ظهراً — راقب تحوّل إضاءة الأبراج إلى الليل بعد ثانيتين..."
+          : "Proof Flight 2/3 · Manhattan Midtown: Midday office tower peak — transitioning to Night residential glow..."
+      );
       setLeftOpen(false);
       setRightOpen(true);
       setCategory("cafe");
       setUseCustomDna(false);
       setTimeOfDay("midday");
       await loadArea("manhattan-midtown");
-      mapRef.current?.flyTo({ center: [-73.9832, 40.7536], zoom: 15.8, pitch: 60, bearing: -24, duration: 1300 });
+      mapRef.current?.flyTo({ center: [-73.9832, 40.7536], zoom: 15.8, pitch: 60, bearing: -24, duration: 1200 });
       await runSimulation(40.7536, -73.9832, { slug: "manhattan-midtown", cat: "cafe", tod: "midday", custom: false });
       setTimeout(() => {
         setTimeOfDay("night");
+        setFlightBanner(
+          lang === "ar"
+            ? "رحلة 2/3 · الفترة الليلية: خفوت أبراج المكاتب وتوهّج الكتلة السكنية وإعادة حساب الجاذبية!"
+            : "Proof Flight 2/3 · Night Shift active: Office towers dimmed, residential density illuminated & Huff gravity updated!"
+        );
         void runSimulation(40.7536, -73.9832, { slug: "manhattan-midtown", cat: "cafe", tod: "night", custom: false, silent: true });
+        setTimeout(() => setFlightBanner(null), 5500);
       }, 2600);
     } else if (flight === "agent_memory") {
+      setFlightBanner(
+        lang === "ar"
+          ? "رحلة 3/3 · محسّن العقارات Law 6 اختار أفضل قسيمة — اضغط «رفض وحجب» لتشهد الحفظ بـ COMMIT والقفز للبديل!"
+          : "Proof Flight 3/3 · Law 6 Optimizer selected #1 buildable (:Parcel) — press Reject & Block to test COMMIT rerouting!"
+      );
       setLeftOpen(false);
       setRightOpen(true);
       await handleOptimize();
       setRelateOpen(true);
+      setTimeout(() => setFlightBanner(null), 7000);
     }
   };
 
@@ -1511,6 +1583,13 @@ export default function App() {
           {loadingText ? `⚡ ${loadingText}` : TOOL_HINTS_I18N[lang][activeTool]}
         </span>
       </div>
+
+      {flightBanner && (
+        <div className="flight-banner" dir={lang === "ar" ? "rtl" : "ltr"}>
+          <Sparkles size={14} className="c-emerald" />
+          <span>{flightBanner}</span>
+        </div>
+      )}
 
       <RelateInspectorPanel
         lang={lang}

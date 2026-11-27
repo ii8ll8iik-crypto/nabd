@@ -1267,3 +1267,49 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
 .palette-item-copy { flex: 1; min-width: 0; }
 .palette-item-title { font-size: 12.5px; font-weight: 600; color: #f1f5f9; }
 .palette-item-desc { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+
+
+/* NABD v2 NON-OVERLAP & FLIGHT BANNER */
+.glassbox-shell {
+  transition: left 240ms ease, right 240ms ease, width 240ms ease, transform 240ms ease;
+}
+@media (min-width: 1120px) {
+  .glassbox-shell.has-right:not(.has-left) {
+    left: 16px;
+    right: 396px;
+    width: auto;
+    transform: none;
+  }
+  .glassbox-shell.has-left:not(.has-right) {
+    left: 366px;
+    right: 16px;
+    width: auto;
+    transform: none;
+  }
+  .glassbox-shell.has-left.has-right {
+    left: 366px;
+    right: 396px;
+    width: auto;
+    transform: none;
+  }
+}
+.flight-banner {
+  position: fixed;
+  top: 98px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.88);
+  border: 1px solid rgba(16, 185, 129, 0.48);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px);
+  color: #ecfdf5;
+  font-size: 12px;
+  font-weight: 600;
+  max-width: min(90vw, 760px);
+}
