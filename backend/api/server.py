@@ -5,12 +5,18 @@ Nabd Urban Physics API (FastAPI 3.0)
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from dataclasses import replace
@@ -41,10 +47,28 @@ app.add_middleware(
 )
 
 _ENGINE_CACHE: Dict[str, UrbanGraphEngine] = {}
+_EPHEMERAL_MODE = os.getenv("NABD_EPHEMERAL_DATA", "").strip().lower() in ("1", "true", "yes")
+_EPHEMERAL_TMP = tempfile.TemporaryDirectory(prefix="nabd_live_") if _EPHEMERAL_MODE else None
+
+
+def _active_data_dir() -> Path:
+    if _EPHEMERAL_TMP is None:
+        return DATA_DIR
+    rt = Path(_EPHEMERAL_TMP.name)
+    for src in DATA_DIR.glob("*.rl"):
+        dst = rt / src.name
+        if not dst.exists():
+            shutil.copy2(src, dst)
+    for src in DATA_DIR.glob("*.build-receipt.json"):
+        dst = rt / src.name
+        if not dst.exists():
+            shutil.copy2(src, dst)
+    return rt
 
 
 def get_engine(slug: str) -> UrbanGraphEngine:
-    db_path = DATA_DIR / f"{slug}.rl"
+    active_dir = _active_data_dir()
+    db_path = active_dir / f"{slug}.rl"
     if not db_path.exists():
         raise HTTPException(status_code=404, detail=f"Area '{slug}' not found.")
     if slug not in _ENGINE_CACHE:
@@ -497,7 +521,7 @@ class ParcelOwnershipRequest(BaseModel):
 def get_relate_info(slug: str) -> Dict[str, Any]:
     eng = get_engine(slug)
     info = eng.relate.store_info()
-    receipt_path = DATA_DIR / f"{slug}.build-receipt.json"
+    receipt_path = _active_data_dir() / f"{slug}.build-receipt.json"
     receipt = None
     if receipt_path.exists():
         try:
@@ -606,3 +630,36 @@ def update_parcel_ownership(slug: str, parcel_id: str, req: ParcelOwnershipReque
         "tx_state": "COMMITTED",
         "parcel": updated,
     }
+
+
+@app.post("/api/demo/reset")
+def reset_demo_state() -> Dict[str, Any]:
+    """Reset ephemeral public demo bundles back to clean SHA-256 verified baselines."""
+    _shutdown_cached_engines()
+    if _EPHEMERAL_TMP is not None:
+        rt = Path(_EPHEMERAL_TMP.name)
+        for item in rt.iterdir():
+            if item.is_file():
+                item.unlink()
+        _active_data_dir()
+    return {
+        "status": "reset",
+        "ephemeral_mode": _EPHEMERAL_MODE,
+        "available_areas": sorted(p.stem for p in _active_data_dir().glob("*.rl")),
+    }
+
+
+_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if (_FRONTEND_DIST / "index.html").exists():
+    _ASSETS_DIR = _FRONTEND_DIST / "assets"
+    if _ASSETS_DIR.exists():
+        app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="frontend-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found.")
+        candidate = (_FRONTEND_DIST / full_path).resolve()
+        if full_path and candidate.is_file() and _FRONTEND_DIST.resolve() in candidate.parents:
+            return FileResponse(str(candidate))
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))
