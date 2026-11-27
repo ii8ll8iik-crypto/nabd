@@ -1409,3 +1409,58 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
     max-width: 70vw !important;
   }
 }
+
+/* NABD MOBILE BOTTOM BAR FULL VISIBILITY FIX */
+@media (max-width: 768px) {
+  .bottom-bar,
+  .hud-bottom,
+  .action-bar {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    bottom: 12px !important;
+    width: auto !important;
+    max-width: calc(100vw - 16px) !important;
+    box-sizing: border-box !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    z-index: 60 !important;
+    pointer-events: auto !important;
+    touch-action: pan-x !important;
+    gap: 5px !important;
+    padding: 5px 8px !important;
+    font-size: 10.5px !important;
+  }
+
+  .bottom-bar::-webkit-scrollbar,
+  .hud-bottom::-webkit-scrollbar,
+  .action-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .bottom-bar > *,
+  .hud-bottom > *,
+  .action-bar > * {
+    flex-shrink: 0 !important;
+    pointer-events: auto !important;
+  }
+
+  .maplibregl-ctrl-bottom-right,
+  .maplibregl-ctrl-bottom-left {
+    bottom: 72px !important;
+    z-index: 20 !important;
+  }
+
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group,
+  .maplibregl-ctrl-bottom-left .maplibregl-ctrl-group {
+    transform: scale(0.88);
+    transform-origin: bottom right;
+  }
+
+  .maplibregl-ctrl-attrib {
+    font-size: 9px !important;
+    max-width: 68vw !important;
+  }
+}
