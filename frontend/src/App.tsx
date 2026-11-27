@@ -455,6 +455,12 @@ export default function App() {
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
+    if (typeof maplibregl.setRTLTextPlugin === "function" && (!maplibregl.getRTLTextPluginStatus || maplibregl.getRTLTextPluginStatus() === "unavailable")) {
+      maplibregl.setRTLTextPlugin(
+        "https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/dist/mapbox-gl-rtl-text.js",
+        true
+      );
+    }
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: DARK_BASEMAP,
