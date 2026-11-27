@@ -86,7 +86,7 @@ export function TelemetryDrawer({
     : { text: isAr ? "موقع ضعيف أو متشبع" : "Saturated / Weak", cls: "pill-rose" };
 
   return (
-    <aside className={`drawer-shell right ${open ? "open" : "closed"}`} dir={isAr ? "rtl" : "ltr"}>
+    <aside className={`drawer-shell right ${open ? "open" : "closed"} nabd-mobile-analytics-drawer`} dir={isAr ? "rtl" : "ltr"}>
       <div className="cyber-panel drawer-card">
         <div className="drawer-header">
           <div className="tab-strip">

@@ -111,7 +111,7 @@ export default function App() {
   const [areaData, setAreaData] = useState<AreaLayersResponse | null>(null);
 
   const [leftOpen, setLeftOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(() => (typeof window === "undefined" ? true : window.innerWidth > 768));
   const [relateOpen, setRelateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [traceRefresh, setTraceRefresh] = useState(0);
