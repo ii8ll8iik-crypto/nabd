@@ -427,3 +427,163 @@ def geocode_place(q: str, lang: str = "en") -> Dict[str, Any]:
         return {"results": results}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Geocode lookup failed: {exc}")
+
+
+# =============================================================================
+# Nabd v2 — Live Relate Telemetry, Read-Only Cypher & Persistent Agent Memory
+# =============================================================================
+import atexit as _atexit
+import re as _re
+
+_API_FORBIDDEN_CYPHER = _re.compile(
+    r"\b(CREATE|DELETE|DETACH|SET|MERGE|REMOVE|DROP|CALL|LOAD|FOREACH)\b",
+    _re.IGNORECASE,
+)
+_VALID_DECISION_STATUSES = {"APPROVED", "REJECTED", "WATCHLIST"}
+
+
+def _shutdown_cached_engines() -> None:
+    for _eng in list(_ENGINE_CACHE.values()):
+        try:
+            _eng.close()
+        except Exception:
+            pass
+    _ENGINE_CACHE.clear()
+
+
+_atexit.register(_shutdown_cached_engines)
+
+
+class RelateCypherRequest(BaseModel):
+    cypher: str = Field(..., min_length=6, max_length=4000)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class AgentDecisionRequest(BaseModel):
+    parcel_id: str = Field(..., min_length=1)
+    category: str = Field(default="clinic", min_length=1)
+    status: str = Field(..., description="APPROVED | REJECTED | WATCHLIST")
+    reason: str = Field(..., min_length=2, max_length=1000)
+    actor: str = Field(default="studio", max_length=80)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    block_ownership: bool = Field(default=False)
+
+
+class ParcelOwnershipRequest(BaseModel):
+    ownership_status: str = Field(..., min_length=2, max_length=80)
+    note: str = Field(default="", max_length=500)
+
+
+@app.get("/api/area/{slug}/relate/info")
+def get_relate_info(slug: str) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    info = eng.relate.store_info()
+    receipt_path = DATA_DIR / f"{slug}.build-receipt.json"
+    receipt = None
+    if receipt_path.exists():
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except Exception:
+            receipt = None
+    return {
+        "slug": slug,
+        "schema_version": eng.meta.get("schema_version", "2.0"),
+        "store_info": info,
+        "build_receipt": receipt,
+        "trace_count": len(eng.relate.recent_traces(limit=100)),
+    }
+
+
+@app.get("/api/area/{slug}/relate/traces")
+def get_relate_traces(slug: str, limit: int = 30) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    lim = max(1, min(int(limit), 100))
+    traces = eng.relate.recent_traces(limit=lim)
+    return {
+        "slug": slug,
+        "count": len(traces),
+        "traces": traces,
+    }
+
+
+@app.post("/api/area/{slug}/relate/cypher")
+def run_relate_cypher_api(slug: str, req: RelateCypherRequest) -> Dict[str, Any]:
+    if _API_FORBIDDEN_CYPHER.search(req.cypher):
+        raise HTTPException(
+            status_code=400,
+            detail="Write or procedure clauses are blocked. Only read-only MATCH/RETURN queries are permitted.",
+        )
+    eng = get_engine(slug)
+    try:
+        res = eng.relate.query(req.cypher, tag="api:cypher_readonly")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Cypher execution failed: {exc}") from exc
+    return {
+        "slug": slug,
+        "row_count": len(res.rows),
+        "elapsed_ms": round(float(res.timings.get("elapsed_ms", 0.0)), 3),
+        "rows": res.rows[: req.limit],
+    }
+
+
+@app.get("/api/area/{slug}/decisions")
+def get_agent_decisions(slug: str, limit: int = 50) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    lim = max(1, min(int(limit), 200))
+    decisions = eng.list_agent_decisions(limit=lim)
+    return {
+        "slug": slug,
+        "count": len(decisions),
+        "decisions": decisions,
+    }
+
+
+@app.post("/api/area/{slug}/decisions")
+def create_agent_decision(slug: str, req: AgentDecisionRequest) -> Dict[str, Any]:
+    status_norm = req.status.strip().upper()
+    if status_norm not in _VALID_DECISION_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{req.status}'. Must be one of {sorted(_VALID_DECISION_STATUSES)}.",
+        )
+    eng = get_engine(slug)
+    if req.parcel_id not in eng.p_index:
+        raise HTTPException(status_code=404, detail=f"Parcel '{req.parcel_id}' not found in '{slug}'.")
+    decision = eng.commit_agent_decision(
+        parcel_id=req.parcel_id,
+        category=req.category,
+        status=status_norm,
+        reason=req.reason,
+        actor=req.actor,
+        metrics=req.metrics,
+    )
+    ownership_update = None
+    if req.block_ownership:
+        ownership_update = eng.set_parcel_ownership(
+            parcel_id=req.parcel_id,
+            ownership_status="BLOCKED_OWNERSHIP",
+            note=req.reason,
+        )
+    return {
+        "slug": slug,
+        "tx_state": "COMMITTED",
+        "decision": decision,
+        "ownership_update": ownership_update,
+    }
+
+
+@app.post("/api/area/{slug}/parcels/{parcel_id}/ownership")
+def update_parcel_ownership(slug: str, parcel_id: str, req: ParcelOwnershipRequest) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    if parcel_id not in eng.p_index:
+        raise HTTPException(status_code=404, detail=f"Parcel '{parcel_id}' not found in '{slug}'.")
+    updated = eng.set_parcel_ownership(
+        parcel_id=parcel_id,
+        ownership_status=req.ownership_status.strip(),
+        note=req.note,
+    )
+    return {
+        "slug": slug,
+        "tx_state": "COMMITTED",
+        "parcel": updated,
+    }
