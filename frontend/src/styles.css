@@ -1314,15 +1314,67 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
   max-width: min(90vw, 760px);
 }
 
-/* NABD MOBILE EXACT HUD & RAIL FIX */
+/* NABD UNIFIED DESKTOP + MOBILE FIX */
+
+/* 1. Desktop + Mobile: override line-289 pointer-events:none on Relate HUD bar */
+.status-toast.relate-hud-bar {
+  pointer-events: auto !important;
+  z-index: 45;
+}
+
+.status-toast.relate-hud-bar .hud-pill,
+.status-toast.relate-hud-bar button {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+
+/* 2. Mobile-Only Layout (zero effect on desktop > 768px) */
 @media (max-width: 768px) {
-  html,
-  body,
-  #root {
-    height: 100dvh !important;
-    max-height: 100dvh !important;
+  .top-bar,
+  .block-title,
+  .dot,
+  .kpi-name,
+  .micro-telemetry,
+  .ml-item {
+    max-width: calc(100vw - 12px) !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    flex-wrap: nowrap !important;
+    justify-content: flex-start !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    touch-action: pan-x !important;
+    pointer-events: auto !important;
   }
 
+  .top-bar {
+    left: 6px !important;
+    right: 6px !important;
+    width: auto !important;
+    transform: none !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+
+  .top-bar::-webkit-scrollbar,
+  .tool-rail::-webkit-scrollbar,
+  .nabd-mobile-toolrail::-webkit-scrollbar,
+  .status-toast.relate-hud-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .top-bar > *,
+  .tool-rail > *,
+  .nabd-mobile-toolrail > *,
+  .status-toast.relate-hud-bar > * {
+    flex: 0 0 auto !important;
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    pointer-events: auto !important;
+  }
+
+  .tool-rail,
   .nabd-mobile-toolrail {
     display: flex !important;
     visibility: visible !important;
@@ -1345,21 +1397,23 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
     scrollbar-width: none !important;
     touch-action: pan-x !important;
     pointer-events: auto !important;
-    z-index: 70 !important;
+    z-index: 80 !important;
     gap: 6px !important;
     padding: 6px 8px !important;
   }
 
   .status-toast.relate-hud-bar {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
     position: fixed !important;
     left: 8px !important;
     right: 8px !important;
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+    bottom: calc(66px + env(safe-area-inset-bottom, 0px)) !important;
     top: auto !important;
     width: auto !important;
     max-width: calc(100vw - 16px) !important;
     transform: none !important;
-    display: flex !important;
     flex-direction: row !important;
     flex-wrap: nowrap !important;
     justify-content: flex-start !important;
@@ -1370,28 +1424,18 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
     scrollbar-width: none !important;
     touch-action: pan-x !important;
     pointer-events: auto !important;
-    z-index: 65 !important;
+    z-index: 75 !important;
     gap: 6px !important;
     padding: 5px 10px !important;
-  }
-
-  .nabd-mobile-toolrail::-webkit-scrollbar,
-  .status-toast.relate-hud-bar::-webkit-scrollbar {
-    display: none;
-  }
-
-  .nabd-mobile-toolrail > *,
-  .status-toast.relate-hud-bar > * {
-    flex: 0 0 auto !important;
-    white-space: nowrap !important;
-    pointer-events: auto !important;
   }
 
   .status-toast.relate-hud-bar .hud-hint {
     display: none !important;
   }
 
-  .nabd-mobile-analytics-drawer {
+  .drawer-shell.left:not(.closed),
+  .drawer-shell.right:not(.closed),
+  .nabd-mobile-analytics-drawer:not(.closed) {
     position: fixed !important;
     top: 10px !important;
     bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important;
@@ -1406,9 +1450,16 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
     border-radius: 16px !important;
   }
 
+  .drawer-shell.closed,
+  .nabd-mobile-analytics-drawer.closed {
+    pointer-events: none !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+  }
+
   .maplibregl-ctrl-bottom-right,
   .maplibregl-ctrl-bottom-left {
-    bottom: calc(122px + env(safe-area-inset-bottom, 0px)) !important;
-    z-index: 20 !important;
+    bottom: calc(126px + env(safe-area-inset-bottom, 0px)) !important;
+    z-index: 25 !important;
   }
 }
