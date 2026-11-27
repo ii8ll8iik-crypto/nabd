@@ -1,16 +1,16 @@
 """
-Nabd Urban Physics Engine — The 7 Laws + Tobler's Asymmetric Terrain Slope Physics
-+ Environmental/Tourism/Zoning Guardrail + Graph-Inferred Demographics + Live Sandbox.
+Nabd Urban Physics Engine v2 — Live Transactional Relate Core + 3D Volumetric Parcels
++ Bounded Local Subgraph + 7 Laws + Tobler's Terrain + Environmental Guardrail + Agent Memory.
 """
 from __future__ import annotations
 
 import json
 import math
-import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -27,60 +27,9 @@ from backend.engine.catalog import (
 from backend.engine.terrain_env import (
     evaluate_site_environment,
     haversine_m,
-    load_or_fetch_elevations,
-    load_or_fetch_env_zones,
     tobler_speed_ratio,
 )
-
-
-def _parse_relate_json(raw: str) -> List[Dict[str, Any]]:
-    raw = raw.strip()
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list):
-            if data and isinstance(data[0], dict) and "data" in data[0]:
-                data = data[0]
-            elif data and isinstance(data[0], dict) and "rows" in data[0]:
-                data = data[0]
-            else:
-                return data
-        if isinstance(data, dict):
-            if "data" in data and isinstance(data["data"], list):
-                return data["data"]
-            if "columns" in data and "rows" in data:
-                cols, rows = data["columns"], data["rows"]
-                if rows and isinstance(rows[0], dict):
-                    return rows
-                return [dict(zip(cols, r)) for r in rows]
-            if "rows" in data:
-                return data["rows"]
-            if "results" in data:
-                return data["results"]
-            return [data]
-    except json.JSONDecodeError:
-        pass
-    rows_out: List[Dict[str, Any]] = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if line:
-            obj = json.loads(line)
-            if isinstance(obj, dict):
-                rows_out.append(obj)
-    return rows_out
-
-
-def query_relate(db_path: Path, cypher: str) -> List[Dict[str, Any]]:
-    cmd = [
-        "relate", "-d", str(db_path),
-        "--read-only", "--json", "--max-rows", "0",
-        "-c", cypher,
-    ]
-    res = subprocess.run(cmd, text=True, capture_output=True)
-    if res.returncode != 0:
-        raise RuntimeError(f"Relate query error:\n{res.stderr}\nQuery: {cypher}")
-    return _parse_relate_json(res.stdout)
+from backend.relate_core import RelateClient
 
 
 def _dict_to_demo_vec(d: Dict[str, float]) -> np.ndarray:
@@ -113,73 +62,109 @@ class RealityOverrides:
 
 
 class UrbanGraphEngine:
-    def __init__(self, db_path: Path):
-        self.db_path = Path(db_path)
-        if not self.db_path.exists():
-            raise FileNotFoundError(f"Relate database not found: {self.db_path}")
+    def __init__(self, db_path: Path | str, read_only: bool = False) -> None:
+        self.db_path = Path(db_path).resolve()
+        self.relate = RelateClient(self.db_path, read_only=read_only)
         self._load_from_relate()
 
+    def close(self) -> None:
+        self.relate.close()
+
+    def __enter__(self) -> "UrbanGraphEngine":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
     def _load_from_relate(self) -> None:
-        metas = query_relate(
-            self.db_path,
-            "MATCH (m:Meta) RETURN m.slug AS slug, m.label AS label, m.center_lat AS center_lat, "
-            "m.center_lon AS center_lon, m.radius_m AS radius_m, m.synced_at AS synced_at, "
-            "m.total_est_pop AS total_est_pop",
-        )
+        metas = self.relate.query(
+            "MATCH (m:Meta) RETURN m.slug AS slug, m.label AS label, m.schema_version AS schema_version, "
+            "m.center_lat AS center_lat, m.center_lon AS center_lon, m.radius_m AS radius_m, "
+            "m.synced_at AS synced_at, m.total_est_pop AS total_est_pop, "
+            "m.total_day_pop AS total_day_pop, m.total_night_pop AS total_night_pop, "
+            "m.total_gfa_m2 AS total_gfa_m2, m.min_elev_m AS min_elev_m, m.max_elev_m AS max_elev_m",
+            tag="boot:meta",
+        ).rows
         self.meta: Dict[str, Any] = metas[0] if metas else {}
-        slug = str(self.meta.get("slug") or self.db_path.stem)
 
         self.synergies: Dict[str, List[Dict[str, Any]]] = {}
-        for row in query_relate(
-            self.db_path,
+        for row in self.relate.query(
             "MATCH (a:ServiceType)-[r:SYNERGIZES_WITH]->(b:ServiceType) "
             "RETURN a.key AS src, b.key AS dst, r.multiplier AS multiplier, r.decay_gamma AS decay_gamma",
-        ):
+            tag="boot:synergies",
+        ).rows:
             self.synergies.setdefault(row["src"], []).append(row)
 
-        self.junctions = query_relate(
-            self.db_path,
-            "MATCH (j:Junction) RETURN j.id AS id, j.lat AS lat, j.lon AS lon",
-        )
+        self.junctions = self.relate.query(
+            "MATCH (j:Junction) RETURN j.id AS id, j.lat AS lat, j.lon AS lon, j.elev_m AS elev_m",
+            tag="boot:junctions",
+        ).rows
         self.j_index: Dict[str, int] = {j["id"]: i for i, j in enumerate(self.junctions)}
         self.j_coords = np.array([[j["lat"], j["lon"]] for j in self.junctions], dtype=np.float64)
         self.j_tree = cKDTree(self.j_coords)
 
-        # Load Real DEM Elevations & Environmental Zones in parallel (cached locally)
-        clat = float(self.meta.get("center_lat", 32.5365))
-        clon = float(self.meta.get("center_lon", 35.8555))
-        rad = float(self.meta.get("radius_m", 750.0))
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_elev = pool.submit(load_or_fetch_elevations, slug, self.junctions)
-            f_env = pool.submit(load_or_fetch_env_zones, slug, clat, clon, rad)
-            self.elev_map: Dict[str, float] = f_elev.result()
-            self.env_zones: List[Dict[str, Any]] = f_env.result()
-        median_elev = float(np.median(list(self.elev_map.values()))) if self.elev_map else 0.0
-        self.j_elev = np.array([self.elev_map.get(j["id"], median_elev) for j in self.junctions], dtype=np.float64)
-        self.has_elevation = len(self.elev_map) > 0
+        valid_elevs = [float(j["elev_m"]) for j in self.junctions if j.get("elev_m") is not None]
+        self.has_elevation = len(valid_elevs) > 0 and (max(valid_elevs) - min(valid_elevs) > 0.01 or max(valid_elevs) > 0.1)
+        med_elev = float(np.median(valid_elevs)) if valid_elevs else 0.0
+        self.elev_map: Dict[str, float] = {
+            j["id"]: (float(j["elev_m"]) if j.get("elev_m") is not None else med_elev)
+            for j in self.junctions
+        }
+        self.j_elev = np.array([self.elev_map[j["id"]] for j in self.junctions], dtype=np.float64)
 
-        self.streets = query_relate(
-            self.db_path,
+        env_rows = self.relate.query(
+            "MATCH (z:EnvZone) RETURN z.id AS id, z.name AS name, z.zone_type AS zone_type, "
+            "z.label_ar AS label_ar, z.geom_type AS geom_type, z.lat AS lat, z.lon AS lon, "
+            "z.is_restricted AS is_restricted, z.coordinates_json AS coordinates_json",
+            tag="boot:env_zones",
+        ).rows
+        self.env_zones: List[Dict[str, Any]] = []
+        for r in env_rows:
+            try:
+                coords = json.loads(r.get("coordinates_json") or "[]")
+            except Exception:
+                coords = [r.get("lon", 0.0), r.get("lat", 0.0)]
+            self.env_zones.append({
+                "id": r["id"],
+                "name": r.get("name") or r.get("zone_type") or "Zone",
+                "zone_type": r.get("zone_type") or "park",
+                "label_ar": r.get("label_ar") or r.get("zone_type") or "منطقة",
+                "geom_type": r.get("geom_type") or "Point",
+                "lat": float(r.get("lat") or 0.0),
+                "lon": float(r.get("lon") or 0.0),
+                "is_restricted": bool(r.get("is_restricted", False)),
+                "coordinates": coords,
+            })
+
+        self.streets = self.relate.query(
             "MATCH (a:Junction)-[e:STREET]->(b:Junction) "
             "RETURN a.id AS src, b.id AS dst, e.length_m AS length_m, e.walk_min AS walk_min, "
             "e.drive_min AS drive_min, e.highway AS highway, e.capacity AS capacity, e.oneway AS oneway",
-        )
+            tag="boot:streets",
+        ).rows
 
-        self.blocks = query_relate(
-            self.db_path,
-            "MATCH (b:Block)-[r:ACCESSES]->(j:Junction) "
+        self.blocks = self.relate.query(
+            "MATCH (b:Parcel)-[r:FRONTS_ON]->(j:Junction) "
             "RETURN b.id AS id, b.lat AS lat, b.lon AS lon, b.area_m2 AS area_m2, "
-            "b.levels AS levels, b.est_pop AS est_pop, b.kind AS kind, "
+            "b.levels AS levels, b.gfa_m2 AS gfa_m2, b.est_pop AS est_pop, "
+            "b.day_pop AS day_pop, b.night_pop AS night_pop, b.kind AS kind, "
+            "b.land_use AS land_use, b.site_suitability AS site_suitability, "
+            "b.ownership_status AS ownership_status, b.env_restricted AS env_restricted, "
             "j.id AS junction_id, r.euclid_m AS snap_m, r.walk_min AS snap_walk_min",
-        )
+            tag="boot:parcels",
+        ).rows
+        self.parcels = self.blocks
+        self.p_index: Dict[str, int] = {b["id"]: i for i, b in enumerate(self.blocks)}
+        self.p_coords = np.array([[b["lat"], b["lon"]] for b in self.blocks], dtype=np.float64) if self.blocks else np.zeros((0, 2))
+        self.p_tree = cKDTree(self.p_coords) if len(self.blocks) else None
 
-        self.services = query_relate(
-            self.db_path,
+        self.services = self.relate.query(
             "MATCH (s:Service)-[r:LOCATED_ON]->(j:Junction) "
             "RETURN s.id AS id, s.name AS name, s.category AS category, s.lat AS lat, s.lon AS lon, "
             "s.attraction AS attraction, s.capacity AS capacity, "
             "j.id AS junction_id, r.euclid_m AS snap_m, r.walk_min AS snap_walk_min",
-        )
+            tag="boot:services",
+        ).rows
 
         (
             self._base_walk_T,
@@ -189,6 +174,158 @@ class UrbanGraphEngine:
             self._arterial_j,
         ) = self._build_sparse_graphs(set())
         self._base_block_demo = self._infer_graph_demographics()
+
+    def snap_parcel(self, lat: float, lon: float) -> Optional[Dict[str, Any]]:
+        """Snap a map click to the nearest real 3D (:Parcel) rather than an intersection."""
+        if self.p_tree is None or not self.blocks:
+            return None
+        _, p_idx = self.p_tree.query([lat, lon])
+        p = self.blocks[int(p_idx)]
+        dist_m = round(haversine_m(lat, lon, float(p["lat"]), float(p["lon"])), 1)
+        return {**p, "dist_to_click_m": dist_m}
+
+    def run_whatif_relate_context(
+        self,
+        parcel: Optional[Dict[str, Any]],
+        category: str,
+        label_en: str,
+    ) -> Dict[str, Any]:
+        """Run a real ACID What-If injection + multi-hop context traversal inside Relate, then ROLLBACK."""
+        if not parcel:
+            return {"tx_state": "SKIPPED", "parcel": {}, "multi_hop_context": {}}
+        if self.relate.read_only:
+            r1 = self.relate.query(
+                "MATCH (p:Parcel {id: $pid})-[:FRONTS_ON]->(j:Junction) "
+                "RETURN p.id AS parcel_id, p.land_use AS land_use, p.site_suitability AS suitability, "
+                "p.ownership_status AS ownership, p.levels AS levels, p.gfa_m2 AS gfa_m2, j.elev_m AS elev_m",
+                {"pid": parcel["id"]},
+                tag=f"context:{category}:site",
+            )
+            r2 = self.relate.query(
+                "MATCH (p:Parcel {id: $pid})-[:FRONTS_ON]->(j:Junction) "
+                "OPTIONAL MATCH (j)-[:STREET*1..2]-(nj:Junction)<-[:LOCATED_ON]-(s:Service) "
+                "WITH j, collect(DISTINCT CASE WHEN s.category = $cat THEN s.name ELSE null END) AS comp_names, "
+                "     count(DISTINCT s) AS nearby_services "
+                "OPTIONAL MATCH (j)-[:NEAR_ZONE]->(z:EnvZone) "
+                "RETURN nearby_services, size([x IN comp_names WHERE x IS NOT NULL]) AS nearby_competitors, "
+                "       collect(DISTINCT z.name)[0..5] AS nearby_env_zones",
+                {"pid": parcel["id"], "cat": category},
+                tag=f"context:{category}:hops",
+            )
+            return {
+                "tx_state": "READ_ONLY_CONTEXT",
+                "elapsed_ms": round(
+                    float(r1.timings.get("elapsed_ms", 0.0)) + float(r2.timings.get("elapsed_ms", 0.0)), 3
+                ),
+                "parcel": r1.rows[0] if r1.rows else {},
+                "multi_hop_context": r2.rows[0] if r2.rows else {},
+            }
+
+        sim_id = f"whatif_{uuid.uuid4().hex[:8]}"
+        res = self.relate.whatif_rollback(
+            [
+                (
+                    "MATCH (p:Parcel {id: $pid})-[:FRONTS_ON]->(j:Junction) "
+                    "CREATE (wf:WhatIfFacility {id: $sid, category: $cat, label: $lbl})-[:PROPOSED_AT]->(p) "
+                    "RETURN wf.id AS sim_id, p.id AS parcel_id, p.land_use AS land_use, "
+                    "p.site_suitability AS suitability, p.ownership_status AS ownership, "
+                    "p.levels AS levels, p.gfa_m2 AS gfa_m2, j.elev_m AS elev_m",
+                    {"pid": parcel["id"], "sid": sim_id, "cat": category, "lbl": label_en},
+                ),
+                (
+                    "MATCH (wf:WhatIfFacility {id: $sid})-[:PROPOSED_AT]->(p:Parcel)-[:FRONTS_ON]->(j:Junction) "
+                    "OPTIONAL MATCH (j)-[:STREET*1..2]-(nj:Junction)<-[:LOCATED_ON]-(s:Service) "
+                    "WITH wf, j, collect(DISTINCT CASE WHEN s.category = $cat THEN s.name ELSE null END) AS comp_names, "
+                    "     count(DISTINCT s) AS nearby_services "
+                    "OPTIONAL MATCH (j)-[:NEAR_ZONE]->(z:EnvZone) "
+                    "RETURN nearby_services, size([x IN comp_names WHERE x IS NOT NULL]) AS nearby_competitors, "
+                    "       collect(DISTINCT z.name)[0..5] AS nearby_env_zones",
+                    {"sid": sim_id, "cat": category},
+                ),
+            ],
+            tag=f"whatif:{category}",
+        )
+        site_row = res[0].rows[0] if res and res[0].rows else {}
+        hop_row = res[1].rows[0] if len(res) > 1 and res[1].rows else {}
+        total_ms = round(sum(float(r.timings.get("elapsed_ms", 0.0)) for r in res), 3)
+        return {
+            "tx_state": "ROLLED_BACK",
+            "elapsed_ms": total_ms,
+            "parcel": site_row,
+            "multi_hop_context": hop_row,
+        }
+
+    def commit_agent_decision(
+        self,
+        parcel_id: str,
+        category: str,
+        status: str,
+        reason: str,
+        actor: str = "studio",
+        metrics: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Persist an APPROVED / REJECTED / WATCHLIST decision node connected to (:Parcel) via ACID COMMIT."""
+        did = f"dec_{uuid.uuid4().hex[:10]}"
+        now = datetime.now(timezone.utc).isoformat()
+        m_json = json.dumps(metrics or {}, ensure_ascii=False)
+        res = self.relate.commit_transaction(
+            [
+                (
+                    "MATCH (p:Parcel {id: $pid}) "
+                    "CREATE (d:AgentDecision {id: $did, category: $cat, status: $st, reason: $rsn, "
+                    "actor: $actor, created_at: $ts, metrics_json: $mj})-[:EVALUATES]->(p) "
+                    "RETURN d.id AS id, d.status AS status, d.category AS category, d.reason AS reason, "
+                    "d.actor AS actor, d.created_at AS created_at, p.id AS parcel_id, p.lat AS lat, p.lon AS lon",
+                    {
+                        "pid": parcel_id,
+                        "did": did,
+                        "cat": category,
+                        "st": status.upper(),
+                        "rsn": reason,
+                        "actor": actor,
+                        "ts": now,
+                        "mj": m_json,
+                    },
+                )
+            ],
+            tag=f"commit:decision:{status.lower()}",
+        )
+        return res[0].rows[0] if res and res[0].rows else {"id": did, "status": status.upper()}
+
+    def list_agent_decisions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        rows = self.relate.query(
+            "MATCH (d:AgentDecision)-[:EVALUATES]->(p:Parcel) "
+            "RETURN d.id AS id, d.category AS category, d.status AS status, d.reason AS reason, "
+            "d.actor AS actor, d.created_at AS created_at, d.metrics_json AS metrics_json, "
+            "p.id AS parcel_id, p.lat AS lat, p.lon AS lon, p.land_use AS land_use, "
+            "p.ownership_status AS ownership_status "
+            "ORDER BY d.created_at DESC LIMIT $lim",
+            {"lim": int(limit)},
+            tag="read:decisions",
+        ).rows
+        for r in rows:
+            try:
+                r["metrics"] = json.loads(r.pop("metrics_json", "{}") or "{}")
+            except Exception:
+                r["metrics"] = {}
+        return rows
+
+    def set_parcel_ownership(self, parcel_id: str, ownership_status: str, note: str = "") -> Dict[str, Any]:
+        """Update real-world parcel ownership / lease readiness (e.g. BLOCKED_OWNERSHIP) in Relate via COMMIT."""
+        res = self.relate.commit_transaction(
+            [
+                (
+                    "MATCH (p:Parcel {id: $pid}) "
+                    "SET p.ownership_status = $st, p.ownership_note = $note "
+                    "RETURN p.id AS parcel_id, p.ownership_status AS ownership_status, p.site_suitability AS site_suitability",
+                    {"pid": parcel_id, "st": ownership_status, "note": note},
+                )
+            ],
+            tag="commit:parcel_ownership",
+        )
+        if parcel_id in self.p_index:
+            self.blocks[self.p_index[parcel_id]]["ownership_status"] = ownership_status
+        return res[0].rows[0] if res and res[0].rows else {"parcel_id": parcel_id, "ownership_status": ownership_status}
 
     def _build_sparse_graphs(
         self, closed_jids: set[str]
@@ -244,7 +381,7 @@ class UrbanGraphEngine:
         def min_walk_to_indices(j_indices: List[int]) -> np.ndarray:
             if not j_indices:
                 return np.full(n_b, np.inf)
-            mat = dijkstra(self._base_walk_T, directed=True, indices=j_indices)
+            mat = dijkstra(self._base_walk_T, directed=True, indices=j_indices, limit=25.0)
             return mat[b_j] if mat.ndim == 1 else np.min(mat[:, b_j], axis=0)
 
         uni_j = [self.j_index[s["junction_id"]] for s in self.services if s["category"] == "university"]
@@ -363,8 +500,8 @@ class UrbanGraphEngine:
             return {"category": category, "illusion_count": 0, "affected_residents": 0, "mean_circuity": 1.0, "illusions": []}
 
         srv_j = [self.j_index[s["junction_id"]] for s in cat_services]
-        dist_m_matrix = dijkstra(len_T, directed=True, indices=srv_j)
-        walk_m_matrix = dijkstra(walk_T, directed=True, indices=srv_j)
+        dist_m_matrix = dijkstra(len_T, directed=True, indices=srv_j, limit=2500.0)
+        walk_m_matrix = dijkstra(walk_T, directed=True, indices=srv_j, limit=35.0)
         if dist_m_matrix.ndim == 1:
             dist_m_matrix = dist_m_matrix[None, :]
             walk_m_matrix = walk_m_matrix[None, :]
@@ -415,6 +552,7 @@ class UrbanGraphEngine:
         overrides: Optional[RealityOverrides] = None,
         monte_carlo_runs: int = 200,
         seed: int = 42,
+        include_relate_tx: bool = True,
     ) -> Dict[str, Any]:
         if custom_spec is not None:
             spec = custom_spec
@@ -442,16 +580,25 @@ class UrbanGraphEngine:
         all_attr = np.array([float(s["attraction"]) for s in existing] + [eff_attraction], dtype=np.float64)
         all_cap = np.array([float(s["capacity"]) for s in existing] + [eff_capacity], dtype=np.float64)
 
-        walk_from_targets = dijkstra(walk_T, directed=True, indices=all_srv_j)
+        max_walk_bound = max(45.0, spec.ideal_walk_min * 3.0)
+        walk_from_targets = dijkstra(walk_T, directed=True, indices=all_srv_j, limit=max_walk_bound)
         if walk_from_targets.ndim == 1:
             walk_from_targets = walk_from_targets[None, :]
 
         # Flat walk time to injected site only (to measure pure terrain uphill/downhill friction!)
-        flat_to_inj = dijkstra(flat_walk_T, directed=True, indices=inj_j_idx)
+        flat_to_inj = dijkstra(flat_walk_T, directed=True, indices=inj_j_idx, limit=max_walk_bound)
 
         b_j = np.array([self.j_index[b["junction_id"]] for b in blocks], dtype=np.int64)
         b_snap = np.array([float(b["snap_walk_min"]) for b in blocks], dtype=np.float64)
-        b_pop = np.array([float(b["est_pop"]) for b in blocks], dtype=np.float64)
+        day_w = {"morning": 0.60, "midday": 0.75, "evening": 0.32, "night": 0.14, "late_night": 0.14}.get(time_of_day, 0.55)
+        b_pop = np.array([
+            max(
+                1.0,
+                day_w * float(b.get("day_pop") if b.get("day_pop") is not None else b["est_pop"])
+                + (1.0 - day_w) * float(b.get("night_pop") if b.get("night_pop") is not None else b["est_pop"]),
+            )
+            for b in blocks
+        ], dtype=np.float64)
 
         w_s = np.array([float(spec.audience_weights.get(ax, 0.5)) for ax in DEMO_AXES], dtype=np.float64)
         base_affinity = max(float(np.dot(BASELINE_VEC, w_s)), 1e-6)
@@ -648,7 +795,26 @@ class UrbanGraphEngine:
             - zoning_penalty
         )
 
+        snapped_parcel = self.snap_parcel(lat, lon)
+        relate_tx = (
+            self.run_whatif_relate_context(snapped_parcel, spec.key, spec.label_en)
+            if include_relate_tx
+            else {"tx_state": "BATCH_SKIPPED"}
+        )
+
         return {
+            "parcel_context": {
+                "parcel_id": snapped_parcel["id"] if snapped_parcel else None,
+                "land_use": snapped_parcel.get("land_use") if snapped_parcel else None,
+                "site_suitability": snapped_parcel.get("site_suitability") if snapped_parcel else None,
+                "ownership_status": snapped_parcel.get("ownership_status") if snapped_parcel else None,
+                "levels": snapped_parcel.get("levels") if snapped_parcel else None,
+                "gfa_m2": snapped_parcel.get("gfa_m2") if snapped_parcel else None,
+                "day_pop": snapped_parcel.get("day_pop") if snapped_parcel else None,
+                "night_pop": snapped_parcel.get("night_pop") if snapped_parcel else None,
+                "dist_to_click_m": snapped_parcel.get("dist_to_click_m") if snapped_parcel else None,
+            },
+            "relate_transaction": relate_tx,
             "injection": {
                 "lat": round(lat, 6), "lon": round(lon, 6),
                 "snapped_junction": inj_jid, "snap_m": inj_snap_m,
@@ -719,31 +885,68 @@ class UrbanGraphEngine:
         overrides: Optional[RealityOverrides] = None,
         custom_spec: Optional[ServiceSpec] = None,
     ) -> List[Dict[str, Any]]:
-        lats, lons = self.j_coords[:, 0], self.j_coords[:, 1]
-        lat_bins = np.linspace(lats.min(), lats.max(), grid_size + 1)
-        lon_bins = np.linspace(lons.min(), lons.max(), grid_size + 1)
+        """Rank real buildable/leasable (:Parcel) sites queried from Relate — never street intersections."""
+        spec_key = custom_spec.key if custom_spec is not None else (category or "barber")
+        standalone_cats = {"school", "sports", "hospital", "park"}
 
-        candidates: List[int] = []
-        seen: set[int] = set()
+        elig_rows = self.relate.query(
+            "MATCH (p:Parcel)-[:FRONTS_ON]->(j:Junction) "
+            "WHERE coalesce(p.env_restricted, false) = false "
+            "  AND coalesce(p.ownership_status, '') <> 'BLOCKED_OWNERSHIP' "
+            "  AND coalesce(p.site_suitability, '') <> 'restricted_env' "
+            "RETURN p.id AS id, p.lat AS lat, p.lon AS lon, p.land_use AS land_use, "
+            "       p.site_suitability AS site_suitability, p.ownership_status AS ownership_status, "
+            "       p.levels AS levels, p.gfa_m2 AS gfa_m2, j.id AS junction_id",
+            tag=f"optimize:eligible_parcels:{spec_key}",
+        ).rows
+        if not elig_rows:
+            return []
+
+        if spec_key in standalone_cats:
+            preferred = [p for p in elig_rows if p.get("site_suitability") in ("vacant_buildable", "mixed_ground_floor", "storefront_lease")]
+        else:
+            preferred = [p for p in elig_rows if p.get("site_suitability") in ("storefront_lease", "mixed_ground_floor", "vacant_buildable")]
+        pool = preferred if len(preferred) >= max(top_k, 8) else elig_rows
+
+        p_arr = np.array([[float(p["lat"]), float(p["lon"])] for p in pool], dtype=np.float64)
+        p_kd = cKDTree(p_arr)
+        lat_bins = np.linspace(p_arr[:, 0].min(), p_arr[:, 0].max(), grid_size + 1)
+        lon_bins = np.linspace(p_arr[:, 1].min(), p_arr[:, 1].max(), grid_size + 1)
+
+        candidates: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
         for i in range(grid_size):
             for k in range(grid_size):
-                _, j_idx = self.j_tree.query([0.5 * (lat_bins[i] + lat_bins[i + 1]), 0.5 * (lon_bins[k] + lon_bins[k + 1])])
-                j_idx = int(j_idx)
-                if j_idx not in seen:
-                    seen.add(j_idx)
-                    candidates.append(j_idx)
+                _, idx = p_kd.query([0.5 * (lat_bins[i] + lat_bins[i + 1]), 0.5 * (lon_bins[k] + lon_bins[k + 1])])
+                cand = pool[int(idx)]
+                if cand["id"] not in seen_ids:
+                    seen_ids.add(cand["id"])
+                    candidates.append(cand)
 
         scored: List[Dict[str, Any]] = []
-        for j_idx in candidates:
-            j = self.junctions[j_idx]
+        for cand in candidates:
             sim = self.simulate_injection(
-                j["lat"], j["lon"], category=category, custom_spec=custom_spec, time_of_day=time_of_day,
-                overrides=overrides, monte_carlo_runs=60,
+                float(cand["lat"]),
+                float(cand["lon"]),
+                category=category,
+                custom_spec=custom_spec,
+                time_of_day=time_of_day,
+                overrides=overrides,
+                monte_carlo_runs=60,
+                include_relate_tx=False,
             )
             if sim["terrain_and_zoning"]["is_restricted"]:
                 continue
             scored.append({
-                "junction_id": j["id"], "lat": round(j["lat"], 6), "lon": round(j["lon"], 6),
+                "parcel_id": cand["id"],
+                "junction_id": cand["junction_id"],
+                "land_use": cand.get("land_use"),
+                "site_suitability": cand.get("site_suitability"),
+                "ownership_status": cand.get("ownership_status"),
+                "levels": cand.get("levels"),
+                "gfa_m2": cand.get("gfa_m2"),
+                "lat": round(float(cand["lat"]), 6),
+                "lon": round(float(cand["lon"]), 6),
                 "gain_J": sim["composite_network_gain_J"],
                 "audience_fit": sim["local_demographics"]["audience_fit_multiplier"],
                 "env_boost": sim["terrain_and_zoning"]["env_boost_multiplier"],

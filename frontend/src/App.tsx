@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Database, Moon, Sparkles, Sun, Terminal } from "lucide-react";
 import {
   buildOverridesPayload,
+  createAgentDecisionApi,
   fetchAreaLayers,
   fetchCatalog,
   illusionsApi,
@@ -13,6 +15,8 @@ import { AiStrategistPanel } from "./components/AiStrategistPanel";
 import { ControlDrawer } from "./components/ControlDrawer";
 import { TelemetryDrawer } from "./components/TelemetryDrawer";
 import { ToolRail } from "./components/ToolRail";
+import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
+import { RelateInspectorPanel } from "./components/RelateInspectorPanel";
 import { TopBar } from "./components/TopBar";
 import { TOOL_HINTS_I18N, ZONE_LABELS } from "./i18n";
 import type {
@@ -62,6 +66,33 @@ function fastDistM(lat1: number, lon1: number, lat2: number, lon2: number): numb
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+function buildCurvedArc(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+  archHeight = 0.24,
+  steps = 22
+): number[][] {
+  const dx = lon2 - lon1;
+  const dy = lat2 - lat1;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+  const nx = -dy / dist;
+  const ny = dx / dist;
+  const midLon = (lon1 + lon2) * 0.5 + nx * dist * archHeight;
+  const midLat = (lat1 + lat2) * 0.5 + ny * dist * archHeight;
+  const pts: number[][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const u = 1 - t;
+    pts.push([
+      u * u * lon1 + 2 * u * t * midLon + t * t * lon2,
+      u * u * lat1 + 2 * u * t * midLat + t * t * lat2,
+    ]);
+  }
+  return pts;
+}
+
 export default function App() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
@@ -79,8 +110,14 @@ export default function App() {
   const [syncRadius, setSyncRadius] = useState<number>(750);
   const [areaData, setAreaData] = useState<AreaLayersResponse | null>(null);
 
-  const [leftOpen, setLeftOpen] = useState(true);
+  const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(true);
+  const [relateOpen, setRelateOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [traceRefresh, setTraceRefresh] = useState(0);
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const [decisionFeedback, setDecisionFeedback] = useState<string | null>(null);
+  const [flightBanner, setFlightBanner] = useState<string | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [is3D, setIs3D] = useState(true);
   const [mapStyle, setMapStyle] = useState<MapStyleMode>("cyber");
@@ -147,20 +184,45 @@ export default function App() {
   }, []);
 
   const refresh3DBuildings = useCallback(
-    (base: AreaLayersResponse | null, sb: SandboxState, sim: SimulationResponse | null) => {
+    (
+      base: AreaLayersResponse | null,
+      sb: SandboxState,
+      sim: SimulationResponse | null,
+      tod: string = "midday"
+    ) => {
       if (!base) return;
       const demolishedSet = new Set(sb.demolishedBlocks);
       const unlockedSet = new Set(sim?.spatial_effects?.unlocked_block_ids ?? []);
       const servedSet = new Set(sim?.spatial_effects?.served_block_ids ?? []);
       const sharedSet = new Set(sim?.spatial_effects?.shared_block_ids ?? []);
+      const isNight = tod === "night" || tod === "evening";
+      const activeParcelId = sim?.parcel_context?.parcel_id ?? "";
 
       const styled: GeoFeatureCollection = {
         type: "FeatureCollection",
         features: base.buildings.features.map((f) => {
           const id = String(f.properties.id ?? "");
           const origH = Number(f.properties.height ?? 7.6);
+          const own = String(f.properties.ownership_status ?? "");
+          const decStatus = String(f.properties.decision_status ?? "");
+          const dayRatio = Number(f.properties.day_ratio ?? 0.45);
+          const landUse = String(f.properties.land_use ?? "residential");
+
           if (demolishedSet.has(id)) {
             return { ...f, properties: { ...f.properties, height: 0.6, override_color: "#7f1d1d" } };
+          }
+          // Crystallized persisted Relate AgentMemory & Ownership states
+          if (own === "BLOCKED_OWNERSHIP") {
+            return { ...f, properties: { ...f.properties, height: Math.max(origH, 12), override_color: "#e11d48" } };
+          }
+          if (decStatus === "APPROVED") {
+            return { ...f, properties: { ...f.properties, height: Math.max(origH, 12), override_color: "#10b981" } };
+          }
+          if (decStatus === "WATCHLIST") {
+            return { ...f, properties: { ...f.properties, height: origH, override_color: "#f59e0b" } };
+          }
+          if (id && id === activeParcelId) {
+            return { ...f, properties: { ...f.properties, height: Math.max(origH, 10), override_color: "#38bdf8" } };
           }
           if (unlockedSet.has(id)) {
             return { ...f, properties: { ...f.properties, height: origH, override_color: "#00e699" } };
@@ -168,9 +230,7 @@ export default function App() {
           if (servedSet.has(id)) {
             return { ...f, properties: { ...f.properties, height: origH, override_color: "#00d4ff" } };
           }
-          if (sharedSet.has(id)) {
-            return { ...f, properties: { ...f.properties, height: origH, override_color: "#f59e0b" } };
-          }
+          void sharedSet;
           if (sb.paintedZones.length > 0) {
             const rings = f.geometry.coordinates as number[][][];
             const pt = rings?.[0]?.[0];
@@ -183,7 +243,28 @@ export default function App() {
               }
             }
           }
-          return { ...f, properties: { ...f.properties, height: origH, override_color: "" } };
+
+          // Volumetric Day/Night Breathing driven by Relate 3D day_pop vs night_pop
+          let pulseColor = "";
+          if (!isNight) {
+            if (dayRatio >= 0.62 || landUse === "office" || landUse === "commercial") {
+              pulseColor = "#0284c7"; // Illuminated daytime office/commercial towers
+            } else if (dayRatio >= 0.48 || landUse === "civic") {
+              pulseColor = "#334155";
+            } else {
+              pulseColor = "#1e2640"; // Quiet daytime residential
+            }
+          } else {
+            if (dayRatio <= 0.42 || landUse === "residential") {
+              pulseColor = "#6d28d9"; // Illuminated evening/night residential neighborhoods
+            } else if (landUse === "mixed_use") {
+              pulseColor = "#4c1d95";
+            } else {
+              pulseColor = "#111827"; // Darkened office skyscrapers at night
+            }
+          }
+
+          return { ...f, properties: { ...f.properties, height: origH, override_color: pulseColor } };
         }),
       };
       updateMapSource("nabd-buildings", styled);
@@ -241,6 +322,8 @@ export default function App() {
         if (seq !== simSeqRef.current) return;
         setSimResult(data);
         setClickedPoint({ lat, lon });
+        setDecisionFeedback(null);
+        setTraceRefresh((n) => n + 1);
         if (markerRef.current && !isDraggingRef.current) {
           markerRef.current.setLngLat([lon, lat]);
         }
@@ -252,10 +335,13 @@ export default function App() {
 
         updateMapSource("ripple-lines", {
           type: "FeatureCollection",
-          features: data.hop2_competitor_ripple.top_impacted.map((c) => ({
+          features: data.hop2_competitor_ripple.top_impacted.map((c, idx) => ({
             type: "Feature",
-            geometry: { type: "LineString", coordinates: [[lon, lat], [c.lon, c.lat]] },
-            properties: { name: c.name, loss: c.visits_lost },
+            geometry: {
+              type: "LineString",
+              coordinates: buildCurvedArc(lat, lon, c.lon, c.lat, idx % 2 === 0 ? 0.25 : -0.22),
+            },
+            properties: { kind: "competitor", name: c.name, loss: c.visits_lost },
           })),
         });
       } catch (err) {
@@ -315,8 +401,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refresh3DBuildings(areaData, sandbox, simResult);
-  }, [areaData, sandbox, simResult, refresh3DBuildings]);
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current || typeof map.setLight !== "function") return;
+    if (timeOfDay === "night") {
+      map.setLight({ anchor: "viewport", color: "#818cf8", intensity: 0.32, position: [1.5, 210, 35] });
+    } else if (timeOfDay === "evening") {
+      map.setLight({ anchor: "viewport", color: "#fb923c", intensity: 0.44, position: [1.5, 240, 25] });
+    } else if (timeOfDay === "morning") {
+      map.setLight({ anchor: "viewport", color: "#fde68a", intensity: 0.52, position: [1.5, 110, 45] });
+    } else {
+      map.setLight({ anchor: "viewport", color: "#e0f2fe", intensity: 0.58, position: [1.5, 150, 65] });
+    }
+  }, [timeOfDay, activeSlug]);
+
+  useEffect(() => {
+    refresh3DBuildings(areaData, sandbox, simResult, timeOfDay);
+  }, [areaData, sandbox, simResult, timeOfDay, refresh3DBuildings]);
 
   useEffect(() => {
     updateMapSource("painted-zones", {
@@ -664,6 +764,12 @@ export default function App() {
         paint: { "circle-radius": 9.5, "circle-color": "#e11d48", "circle-stroke-width": 2.5, "circle-stroke-color": "#ffffff" },
       });
 
+      map.addLayer({
+        id: "layer-ripple-glow",
+        type: "line",
+        source: "ripple-lines",
+        paint: { "line-color": "#f43f5e", "line-width": 7, "line-blur": 5, "line-opacity": 0.34 },
+      });
       map.addLayer({
         id: "layer-ripples",
         type: "line",
@@ -1047,6 +1153,259 @@ export default function App() {
     sandbox.demolishedBlocks.length +
     sandbox.popSurges.length;
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      } else if (e.key === "Escape") {
+        setPaletteOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const handleCommitDecision = async (
+    status: "APPROVED" | "REJECTED" | "WATCHLIST",
+    reason: string,
+    blockOwnership: boolean
+  ) => {
+    const pid = simResult?.parcel_context?.parcel_id;
+    if (!pid || !simResult) return;
+    setDecisionBusy(true);
+    setDecisionFeedback(null);
+    try {
+      await createAgentDecisionApi(activeSlug, {
+        parcel_id: pid,
+        category: simResult.injection.category,
+        status,
+        reason,
+        actor: "studio_planner",
+        metrics: {
+          gain_J: simResult.composite_network_gain_J,
+          p50_visits: simResult.monte_carlo_envelope.p50_base,
+          viability_pct: simResult.monte_carlo_envelope.viability_probability_pct,
+        },
+        block_ownership: blockOwnership,
+      });
+      // Reload 3D layer so parcel immediately crystallizes in emerald/crimson on map
+      const freshArea = await fetchAreaLayers(activeSlug);
+      setAreaData(freshArea);
+      setTraceRefresh((n) => n + 1);
+      if (blockOwnership) {
+        setDecisionFeedback(
+          lang === "ar"
+            ? `✓ حُفظ القرار (COMMIT) وحُجبت ملكية ${pid} — جارٍ ترشيح البديل التالي...`
+            : `✓ COMMITTED & blocked ${pid} — Law 6 Optimizer rerouting to next best parcel...`
+        );
+        await handleOptimize();
+      } else {
+        setDecisionFeedback(
+          lang === "ar"
+            ? `✓ حُفظ القرار (${status}) دائماً داخل ${activeSlug}.rl عبر COMMIT`
+            : `✓ Persisted ${status} on ${pid} inside ${activeSlug}.rl (ACID COMMIT)`
+        );
+        if (clickedPoint) {
+          await runSimulation(clickedPoint.lat, clickedPoint.lon, { silent: true });
+        }
+      }
+    } catch (err) {
+      setErrorText(err instanceof Error ? err.message : "Failed to persist decision");
+    } finally {
+      setDecisionBusy(false);
+    }
+  };
+
+  const runGuidedFlight = async (flight: "irbid_acid" | "manhattan_pulse" | "agent_memory") => {
+    setErrorText(null);
+    if (flight === "irbid_acid") {
+      setFlightBanner(
+        lang === "ar"
+          ? "رحلة 1/3 · مسح الوهم الطوبولوجي حول جامعة اليرموك وحقن عيادة بمعاملة ACID ROLLBACK..."
+          : "Proof Flight 1/3 · Exposing 1.6x+ topological illusions & executing live ACID ROLLBACK in Relate..."
+      );
+      setLeftOpen(false);
+      setRightOpen(true);
+      setCategory("clinic");
+      setUseCustomDna(false);
+      setTimeOfDay("midday");
+      await loadArea("irbid-yarmouk");
+      await handleToggleIllusions(true, "clinic");
+      await runSimulation(32.5365, 35.8555, { slug: "irbid-yarmouk", cat: "clinic", tod: "midday", custom: false });
+      setRelateOpen(true);
+      setTimeout(() => setFlightBanner(null), 6500);
+    } else if (flight === "manhattan_pulse") {
+      setFlightBanner(
+        lang === "ar"
+          ? "رحلة 2/3 · مانهاتن (Midtown): ذروة المكاتب ظهراً — راقب تحوّل إضاءة الأبراج إلى الليل بعد ثانيتين..."
+          : "Proof Flight 2/3 · Manhattan Midtown: Midday office tower peak — transitioning to Night residential glow..."
+      );
+      setLeftOpen(false);
+      setRightOpen(true);
+      setCategory("cafe");
+      setUseCustomDna(false);
+      setTimeOfDay("midday");
+      await loadArea("manhattan-midtown");
+      mapRef.current?.flyTo({ center: [-73.9832, 40.7536], zoom: 15.8, pitch: 60, bearing: -24, duration: 1200 });
+      await runSimulation(40.7536, -73.9832, { slug: "manhattan-midtown", cat: "cafe", tod: "midday", custom: false });
+      setTimeout(() => {
+        setTimeOfDay("night");
+        setFlightBanner(
+          lang === "ar"
+            ? "رحلة 2/3 · الفترة الليلية: خفوت أبراج المكاتب وتوهّج الكتلة السكنية وإعادة حساب الجاذبية!"
+            : "Proof Flight 2/3 · Night Shift active: Office towers dimmed, residential density illuminated & Huff gravity updated!"
+        );
+        void runSimulation(40.7536, -73.9832, { slug: "manhattan-midtown", cat: "cafe", tod: "night", custom: false, silent: true });
+        setTimeout(() => setFlightBanner(null), 5500);
+      }, 2600);
+    } else if (flight === "agent_memory") {
+      setFlightBanner(
+        lang === "ar"
+          ? "رحلة 3/3 · محسّن العقارات Law 6 اختار أفضل قسيمة — اضغط «رفض وحجب» لتشهد الحفظ بـ COMMIT والقفز للبديل!"
+          : "Proof Flight 3/3 · Law 6 Optimizer selected #1 buildable (:Parcel) — press Reject & Block to test COMMIT rerouting!"
+      );
+      setLeftOpen(false);
+      setRightOpen(true);
+      await handleOptimize();
+      setRelateOpen(true);
+      setTimeout(() => setFlightBanner(null), 7000);
+    }
+  };
+
+  const paletteActions: PaletteAction[] = [
+    {
+      id: "flight-irbid",
+      group: "flights",
+      titleEn: "Flight 1 · Irbid Topological Illusion + Live ACID ROLLBACK",
+      titleAr: "رحلة 1 · إربد: وهم القرب + إثبات ROLLBACK الحي",
+      descEn: "Flies to Yarmouk Univ St, exposes 1.6x+ isolated blocks, injects a Clinic & opens Relate Trace.",
+      descAr: "يطير لشارع الجامعة، يكشف المباني المعزولة شبكياً، يحقن عيادة ويفتح سجل Cypher الحي.",
+      badge: "ACID",
+      icon: "flight",
+      run: () => void runGuidedFlight("irbid_acid"),
+    },
+    {
+      id: "flight-manhattan",
+      group: "flights",
+      titleEn: "Flight 2 · Manhattan Skyscrapers Volumetric Day → Night Pulse",
+      titleAr: "رحلة 2 · مانهاتن: نبض ناطحات السحاب بين الظهر والليل",
+      descEn: "Loads manhattan-midtown.rl (97 parks, 3.35M m² GFA) & transitions live from midday office peak to night.",
+      descAr: "يحمّل مانهاتن (97 حديقة و3.35M م²) وينتقل حيّاً من ذروة المكاتب ظهراً إلى الليل.",
+      badge: "3D NYC",
+      icon: "flight",
+      run: () => void runGuidedFlight("manhattan_pulse"),
+    },
+    {
+      id: "flight-memory",
+      group: "flights",
+      titleEn: "Flight 3 · Law 6 Parcel Optimizer + Persistent Agent Memory",
+      titleAr: "رحلة 3 · محسّن العقارات Law 6 + ذاكرة القرارات الدائمة",
+      descEn: "Ranks real buildable (:Parcel) sites from Relate indexes — press Reject & Block to watch instant rerouting.",
+      descAr: "يرشّح عقارات حقيقية مفهرَسة من Relate — اضغط «رفض وحجب» لتشاهد القفز للبديل التالي.",
+      badge: "COMMIT",
+      icon: "flight",
+      run: () => void runGuidedFlight("agent_memory"),
+    },
+    {
+      id: "city-irbid",
+      group: "cities",
+      titleEn: "Switch City · Irbid — Yarmouk & University St",
+      titleAr: "تبديل المدينة · إربد — اليرموك وشارع الجامعة",
+      descEn: "2,563 nodes · 1,246 3D parcels · 557m–675m real DEM slopes.",
+      descAr: "2,563 عقدة · 1,246 عقار 3D · تضاريس حقيقية 557–675م.",
+      badge: "2.4 MB",
+      icon: "city",
+      run: () => void loadArea("irbid-yarmouk"),
+    },
+    {
+      id: "city-manhattan",
+      group: "cities",
+      titleEn: "Switch City · Manhattan — Midtown & Bryant Park (NYC)",
+      titleAr: "تبديل المدينة · مانهاتن — ميدتاون وبراينت بارك (نيويورك)",
+      descEn: "5,206 nodes · 1,297 skyscraper parcels · 97 embedded parks & landmarks.",
+      descAr: "5,206 عقدة · 1,297 ناطحة سحاب · 97 حديقة ومعلماً مدمجاً.",
+      badge: "6.5 MB",
+      icon: "city",
+      run: () => void loadArea("manhattan-midtown"),
+    },
+    {
+      id: "eng-trace",
+      group: "engine",
+      titleEn: "Toggle Relate Glass-Box (Live Trace, Cypher Console & Memory)",
+      titleAr: "فتح / إغلاق الصندوق الزجاجي (سجل Relate وكونسول Cypher)",
+      descEn: "Inspect millisecond Cypher queries, constraints, indexes & persisted AgentDecision nodes.",
+      descAr: "اعرض استعلامات Cypher الحية وزمنها بالميلي ثانية والفهارس وذاكرة الوكلاء.",
+      badge: "TRACE",
+      icon: "trace",
+      run: () => setRelateOpen((v) => !v),
+    },
+    {
+      id: "eng-midday",
+      group: "engine",
+      titleEn: "Volumetric Pulse · Midday Peak (Office & Campus Surge)",
+      titleAr: "النبض الحجمي · ذروة الظهر (مكاتب وجامعات)",
+      descEn: "Illuminates daytime commercial/office towers & recomputes Huff Gravity.",
+      descAr: "يضيء الأبراج التجارية والمكتبية نهاراً ويعيد حساب الجاذبية.",
+      icon: "day",
+      run: () => {
+        setTimeOfDay("midday");
+        if (clickedPoint) void runSimulation(clickedPoint.lat, clickedPoint.lon, { tod: "midday" });
+      },
+    },
+    {
+      id: "eng-night",
+      group: "engine",
+      titleEn: "Volumetric Pulse · Night Shift (Residential Glow)",
+      titleAr: "النبض الحجمي · الفترة الليلية (توهّج سكني)",
+      descEn: "Dims office towers & illuminates night-time residential density.",
+      descAr: "يخفت أبراج المكاتب ويضيء الكثافة السكنية الليلية.",
+      icon: "night",
+      run: () => {
+        setTimeOfDay("night");
+        if (clickedPoint) void runSimulation(clickedPoint.lat, clickedPoint.lon, { tod: "night" });
+      },
+    },
+    {
+      id: "eng-opt",
+      group: "engine",
+      titleEn: "Run Law 6 Spatial Parcel Optimizer",
+      titleAr: "تشغيل محسّن العقارات المكاني (القانون 6)",
+      descEn: "Queries indexed Relate (:Parcel) sites & ranks top 5 buildable locations.",
+      descAr: "يستعلم عن العقارات القابلة للبناء من فهارس Relate ويرتّب أفضل 5 مواقع.",
+      icon: "opt",
+      run: () => void handleOptimize(),
+    },
+    {
+      id: "eng-zen",
+      group: "engine",
+      titleEn: "Toggle 85/15 Zen Map Focus (Hide/Show Side Drawers)",
+      titleAr: "وضع التركيز السينمائي 85/15 (إخفاء/إظهار القوائم)",
+      descEn: "Maximize the 3D city viewport for clean spatial exploration.",
+      descAr: "توسيع الخريطة ثلاثية الأبعاد بملء الشاشة.",
+      icon: "zen",
+      run: () => {
+        const anyOpen = leftOpen || rightOpen;
+        setLeftOpen(!anyOpen);
+        setRightOpen(!anyOpen);
+      },
+    },
+    {
+      id: "eng-lang",
+      group: "engine",
+      titleEn: "Switch Language (English / العربية)",
+      titleAr: "تبديل اللغة (العربية / English)",
+      descEn: "Toggle full bilingual RTL/LTR interface.",
+      descAr: "التبديل الفوري بين الواجهة العربية والإنجليزية.",
+      icon: "lang",
+      run: () => setLang((l) => (l === "en" ? "ar" : "en")),
+    },
+  ];
+
+  const liveTxState = simResult?.relate_transaction?.tx_state ?? "READY";
+  const liveTxMs = simResult?.relate_transaction?.elapsed_ms;
+  const isNightMode = timeOfDay === "night" || timeOfDay === "evening";
+
   return (
     <div className="studio-root">
       <div ref={mapContainerRef} className="map-container" />
@@ -1165,6 +1524,10 @@ export default function App() {
         }}
         onClearPinA={() => setPinnedA(null)}
         errorText={errorText}
+        onCommitDecision={handleCommitDecision}
+        decisionBusy={decisionBusy}
+        decisionFeedback={decisionFeedback}
+        onOpenRelateTrace={() => setRelateOpen(true)}
       />
 
       <AiStrategistPanel
@@ -1180,9 +1543,73 @@ export default function App() {
         onMapAction={handleAiMapAction}
       />
 
-      <div className="status-toast" dir={lang === "ar" ? "rtl" : "ltr"}>
-        {loadingText ? `⚡ ${loadingText}` : TOOL_HINTS_I18N[lang][activeTool]}
+      <div className="status-toast relate-hud-bar" dir={lang === "ar" ? "rtl" : "ltr"}>
+        <button
+          className={`hud-pill hud-relate ${relateOpen ? "active" : ""}`}
+          onClick={() => setRelateOpen((v) => !v)}
+          title={lang === "ar" ? "فتح الصندوق الزجاجي لمحرك Relate" : "Open Relate Live Trace & Cypher Console"}
+        >
+          <span className="tx-dot" />
+          <Database size={12} />
+          <span className="mono">{liveTxState}</span>
+          {liveTxMs != null && <span className="mono tx-ms">{liveTxMs.toFixed(2)}ms</span>}
+          <Terminal size={11} />
+        </button>
+
+        <button
+          className="hud-pill hud-time"
+          onClick={() => {
+            const nextTod = isNightMode ? "midday" : "night";
+            setTimeOfDay(nextTod);
+            if (clickedPoint) void runSimulation(clickedPoint.lat, clickedPoint.lon, { tod: nextTod });
+          }}
+          title={lang === "ar" ? "تبديل النبض الحجمي نهار / ليل" : "Toggle 3D Volumetric Day / Night Pulse"}
+        >
+          {isNightMode ? <Moon size={12} className="c-violet" /> : <Sun size={12} className="c-amber" />}
+          <span>{isNightMode ? (lang === "ar" ? "ليل" : "Night") : lang === "ar" ? "نهار" : "Midday"}</span>
+        </button>
+
+        <button
+          className="hud-pill hud-flights"
+          onClick={() => setPaletteOpen(true)}
+          title={lang === "ar" ? "رحلات البرهان والأوامر (Ctrl+K)" : "Guided Proof Flights & Command Palette (Ctrl+K)"}
+        >
+          <Sparkles size={12} />
+          <span>{lang === "ar" ? "رحلات البرهان" : "Proof Flights"}</span>
+          <span className="kbd-chip mono">⌘K</span>
+        </button>
+
+        <span className="hud-hint trunc">
+          {loadingText ? `⚡ ${loadingText}` : TOOL_HINTS_I18N[lang][activeTool]}
+        </span>
       </div>
+
+      {flightBanner && (
+        <div className="flight-banner" dir={lang === "ar" ? "rtl" : "ltr"}>
+          <Sparkles size={14} className="c-emerald" />
+          <span>{flightBanner}</span>
+        </div>
+      )}
+
+      <RelateInspectorPanel
+        lang={lang}
+        open={relateOpen}
+        onClose={() => setRelateOpen(false)}
+        activeSlug={activeSlug}
+        refreshToken={traceRefresh}
+        onFlyToParcel={(lat, lon) => {
+          mapRef.current?.flyTo({ center: [lon, lat], zoom: 16.4, pitch: 56, duration: 900 });
+          void runSimulation(lat, lon);
+          setRightOpen(true);
+        }}
+      />
+
+      <CommandPalette
+        lang={lang}
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        actions={paletteActions}
+      />
 
       <ToolRail
         lang={lang}

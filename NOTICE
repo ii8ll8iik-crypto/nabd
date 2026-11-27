@@ -1,0 +1,13 @@
+Nabd — Urban Physics & Transactional Graph Engine for AI Agents
+Copyright (c) 2026 Emran Smadi & Nabd Contributors
+
+Third-Party Data & Engine Attributions:
+1. Relate (Neo4j Embedded Graph Database) — used as the single-file ACID graph
+   engine (.rl bundles) with live Cypher execution, constraints, and indexes.
+2. OpenStreetMap Contributors — road topology, building footprints, services,
+   and environmental zones are derived from OpenStreetMap data via Overpass API,
+   available under the Open Database License (ODbL 1.0):
+   https://www.openstreetmap.org/copyright
+3. Digital Elevation Models (DEM) — terrain elevations are sourced from
+   Open-Meteo Copernicus DEM (CC-BY 4.0) and OpenTopoData SRTM 30m fallback.
+4. Frontend Visualization — built with React, Vite, MapLibre GL JS, and Deck.gl.

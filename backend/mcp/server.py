@@ -18,7 +18,6 @@ from backend.engine.physics import (
     DemographicZoneOverride,
     RealityOverrides,
     UrbanGraphEngine,
-    query_relate,
 )
 
 mcp = MCPServer("nabd-urban-physics")
@@ -245,11 +244,120 @@ def run_relate_cypher_readonly(area_slug: str, cypher: str) -> str:
     """Execute a safe read-only Cypher query directly against a Relate (.rl) urban graph (max 50 rows returned)."""
     if _FORBIDDEN_CYPHER.search(cypher):
         raise ValueError("Write operations are forbidden. Only read-only MATCH/RETURN queries are allowed.")
-    db_path = DATA_DIR / f"{area_slug}.rl"
-    if not db_path.exists():
-        raise ValueError(f"Area '{area_slug}' not found.")
-    rows = query_relate(db_path, cypher)
-    return json.dumps({"row_count": len(rows), "rows": rows[:50]}, ensure_ascii=False, indent=2)
+    eng = _get_engine(area_slug)
+    res = eng.relate.query(cypher, tag="mcp:cypher_readonly")
+    rows = res.rows
+    return json.dumps(
+        {
+            "row_count": len(rows),
+            "elapsed_ms": round(float(res.timings.get("elapsed_ms", 0.0)), 3),
+            "rows": rows[:50],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+import atexit as _mcp_atexit
+
+
+def _shutdown_mcp_engines() -> None:
+    for _eng in list(_ENGINES.values()):
+        try:
+            _eng.close()
+        except Exception:
+            pass
+    _ENGINES.clear()
+
+
+_mcp_atexit.register(_shutdown_mcp_engines)
+
+
+@mcp.tool()
+def record_agent_decision(
+    area_slug: str,
+    parcel_id: str,
+    category: str,
+    status: str,
+    reason: str,
+    actor: str = "mcp_agent",
+    block_ownership: bool = False,
+) -> str:
+    """Persist an APPROVED, REJECTED, or WATCHLIST decision node linked to a (:Parcel) inside Relate (.rl) via ACID COMMIT."""
+    status_norm = status.strip().upper()
+    if status_norm not in {"APPROVED", "REJECTED", "WATCHLIST"}:
+        raise ValueError("status must be APPROVED, REJECTED, or WATCHLIST.")
+    eng = _get_engine(area_slug)
+    if parcel_id not in eng.p_index:
+        raise ValueError(f"Parcel '{parcel_id}' not found in '{area_slug}'.")
+    dec = eng.commit_agent_decision(
+        parcel_id=parcel_id,
+        category=category,
+        status=status_norm,
+        reason=reason,
+        actor=actor,
+    )
+    ownership = None
+    if block_ownership:
+        ownership = eng.set_parcel_ownership(parcel_id, "BLOCKED_OWNERSHIP", reason)
+    return json.dumps(
+        {"tx_state": "COMMITTED", "decision": dec, "ownership_update": ownership},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def get_site_decision_history(
+    area_slug: str,
+    parcel_id: str = "",
+    limit: int = 30,
+) -> str:
+    """Retrieve persisted (:AgentDecision) memory from the city's Relate (.rl) graph, optionally filtered by parcel_id."""
+    eng = _get_engine(area_slug)
+    decisions = eng.list_agent_decisions(limit=max(1, min(int(limit), 100)))
+    if parcel_id.strip():
+        decisions = [d for d in decisions if d.get("parcel_id") == parcel_id.strip()]
+    return json.dumps(
+        {"area_slug": area_slug, "count": len(decisions), "decisions": decisions},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def set_parcel_ownership_status(
+    area_slug: str,
+    parcel_id: str,
+    ownership_status: str,
+    note: str = "",
+) -> str:
+    """Update a parcel's real-world ownership/lease status (e.g. BLOCKED_OWNERSHIP) in Relate via ACID COMMIT so optimizers respect it."""
+    eng = _get_engine(area_slug)
+    if parcel_id not in eng.p_index:
+        raise ValueError(f"Parcel '{parcel_id}' not found in '{area_slug}'.")
+    updated = eng.set_parcel_ownership(parcel_id, ownership_status.strip(), note)
+    return json.dumps(
+        {"tx_state": "COMMITTED", "parcel": updated},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def get_relate_live_trace(area_slug: str, limit: int = 20) -> str:
+    """Inspect live Relate Cypher execution traces, transaction states (ROLLED_BACK/COMMITTED), and indexed store stats."""
+    eng = _get_engine(area_slug)
+    lim = max(1, min(int(limit), 100))
+    return json.dumps(
+        {
+            "area_slug": area_slug,
+            "store_info": eng.relate.store_info(),
+            "traces": eng.relate.recent_traces(limit=lim),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 if __name__ == "__main__":

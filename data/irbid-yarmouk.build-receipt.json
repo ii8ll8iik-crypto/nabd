@@ -1,0 +1,50 @@
+{
+  "schema_version": "2.0",
+  "slug": "irbid-yarmouk",
+  "label": "Irbid — Yarmouk & University St",
+  "built_at": "2026-11-21T20:44:58.366070+00:00",
+  "store_file": "irbid-yarmouk.rl",
+  "sha256": "5f51d67634fce93d7151376f0144b5f629b592ed0840144743712576bb6acaa6",
+  "total_bytes": 2457600,
+  "sources": {
+    "topology_and_buildings": "OpenStreetMap via Overpass API",
+    "elevation_dem": "Open-Meteo Copernicus DEM",
+    "environmental_zones": "OpenStreetMap Parks/Water/Tourism/Campus"
+  },
+  "counts": {
+    "junctions": 1121,
+    "streets": 2838,
+    "parcels": 1246,
+    "services": 182,
+    "env_zones": 2,
+    "near_zone_edges": 219
+  },
+  "volumetric": {
+    "total_gfa_m2": 1273385.4,
+    "total_day_pop": 25211,
+    "total_night_pop": 32009,
+    "total_est_pop": 36455,
+    "min_elev_m": 557.0,
+    "max_elev_m": 675.0,
+    "parcel_suitability": {
+      "mixed_ground_floor": 340,
+      "residential_only": 890,
+      "institutional": 12,
+      "storefront_lease": 4
+    }
+  },
+  "relate_store_info": {
+    "node_count": 2563,
+    "rel_count": 4693,
+    "constraints": [],
+    "indexes": [],
+    "codec": "parquet",
+    "format_version": 5
+  },
+  "schema_report": {
+    "constraints_checked": 7,
+    "constraints_applied": 7,
+    "indexes_checked": 6,
+    "indexes_applied": 6
+  }
+}

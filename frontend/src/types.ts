@@ -119,7 +119,32 @@ export interface TerrainAndZoning {
   proximity_drivers: ProximityDriver[];
 }
 
+export interface ParcelContext {
+  parcel_id: string | null;
+  land_use: string | null;
+  site_suitability: string | null;
+  ownership_status: string | null;
+  levels: number | null;
+  gfa_m2: number | null;
+  day_pop: number | null;
+  night_pop: number | null;
+  dist_to_click_m: number | null;
+}
+
+export interface RelateTransactionContext {
+  tx_state: string;
+  elapsed_ms?: number;
+  parcel?: Record<string, unknown>;
+  multi_hop_context?: {
+    nearby_services?: number;
+    nearby_competitors?: number;
+    nearby_env_zones?: string[];
+  };
+}
+
 export interface SimulationResponse {
+  parcel_context?: ParcelContext;
+  relate_transaction?: RelateTransactionContext;
   injection: {
     lat: number;
     lon: number;
@@ -202,7 +227,13 @@ export interface IllusionsResponse {
 }
 
 export interface OptimalSite {
+  parcel_id?: string;
   junction_id: string;
+  land_use?: string;
+  site_suitability?: string;
+  ownership_status?: string;
+  levels?: number;
+  gfa_m2?: number;
   lat: number;
   lon: number;
   gain_J: number;
@@ -301,4 +332,52 @@ export interface AiConfig {
   apiKey: string;
   model: string;
   customBaseUrl: string;
+}
+
+export interface RelateTraceEntry {
+  timestamp: string;
+  tag: string;
+  tx_state: string;
+  elapsed_ms: number;
+  row_count: number;
+  statement?: string;
+  cypher?: string;
+}
+
+export interface RelateInfoResponse {
+  slug: string;
+  schema_version: string;
+  store_info: {
+    node_count?: number;
+    rel_count?: number;
+    constraints?: Array<{ name: string; label: string; properties: string[] }>;
+    indexes?: Array<{ name: string; label: string; property: string }>;
+    total_bytes?: number;
+    codec?: string;
+    format_version?: number;
+  };
+  build_receipt?: Record<string, unknown> | null;
+  trace_count: number;
+}
+
+export interface RelateCypherResponse {
+  slug: string;
+  row_count: number;
+  elapsed_ms: number;
+  rows: Array<Record<string, unknown>>;
+}
+
+export interface AgentDecisionItem {
+  id: string;
+  parcel_id: string;
+  category: string;
+  status: "APPROVED" | "REJECTED" | "WATCHLIST" | string;
+  reason: string;
+  actor: string;
+  created_at: string;
+  lat?: number;
+  lon?: number;
+  land_use?: string;
+  ownership_status?: string;
+  metrics?: Record<string, unknown>;
 }

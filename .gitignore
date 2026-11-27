@@ -12,3 +12,6 @@ data/raw/*.osm.json
 .env
 .DS_Store
 *.log
+data/raw/*.elev.json
+data/raw/*.env.json
+.docker-bin/

@@ -5,12 +5,18 @@ Nabd Urban Physics API (FastAPI 3.0)
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from dataclasses import replace
@@ -41,10 +47,28 @@ app.add_middleware(
 )
 
 _ENGINE_CACHE: Dict[str, UrbanGraphEngine] = {}
+_EPHEMERAL_MODE = os.getenv("NABD_EPHEMERAL_DATA", "").strip().lower() in ("1", "true", "yes")
+_EPHEMERAL_TMP = tempfile.TemporaryDirectory(prefix="nabd_live_") if _EPHEMERAL_MODE else None
+
+
+def _active_data_dir() -> Path:
+    if _EPHEMERAL_TMP is None:
+        return DATA_DIR
+    rt = Path(_EPHEMERAL_TMP.name)
+    for src in DATA_DIR.glob("*.rl"):
+        dst = rt / src.name
+        if not dst.exists():
+            shutil.copy2(src, dst)
+    for src in DATA_DIR.glob("*.build-receipt.json"):
+        dst = rt / src.name
+        if not dst.exists():
+            shutil.copy2(src, dst)
+    return rt
 
 
 def get_engine(slug: str) -> UrbanGraphEngine:
-    db_path = DATA_DIR / f"{slug}.rl"
+    active_dir = _active_data_dir()
+    db_path = active_dir / f"{slug}.rl"
     if not db_path.exists():
         raise HTTPException(status_code=404, detail=f"Area '{slug}' not found.")
     if slug not in _ENGINE_CACHE:
@@ -237,6 +261,12 @@ def get_area_layers(slug: str) -> Dict[str, Any]:
     eng = get_engine(slug)
     raw_polys = _extract_raw_building_polygons(slug)
 
+    decision_by_parcel: Dict[str, str] = {}
+    for dec in eng.list_agent_decisions(limit=200):
+        pid = dec.get("parcel_id")
+        if pid and pid not in decision_by_parcel:
+            decision_by_parcel[pid] = str(dec.get("status") or "")
+
     b_features = []
     for i, b in enumerate(eng.blocks):
         demo_vec = eng._base_block_demo[i]
@@ -249,11 +279,24 @@ def get_area_layers(slug: str) -> Dict[str, Any]:
                 [lon - d, lat - d], [lon + d, lat - d],
                 [lon + d, lat + d], [lon - d, lat + d], [lon - d, lat - d],
             ]
+        day_p = int(b.get("day_pop") if b.get("day_pop") is not None else b["est_pop"])
+        night_p = int(b.get("night_pop") if b.get("night_pop") is not None else b["est_pop"])
+        day_ratio = round(day_p / max(day_p + night_p, 1), 3)
         b_features.append({
             "type": "Feature",
             "geometry": {"type": "Polygon", "coordinates": [ring]},
             "properties": {
-                "id": b["id"], "est_pop": b["est_pop"], "levels": b["levels"],
+                "id": b["id"],
+                "est_pop": b["est_pop"],
+                "day_pop": day_p,
+                "night_pop": night_p,
+                "day_ratio": day_ratio,
+                "levels": b["levels"],
+                "gfa_m2": b.get("gfa_m2", round(float(b.get("area_m2", 120.0)) * int(b.get("levels", 1)), 1)),
+                "land_use": b.get("land_use", "residential"),
+                "site_suitability": b.get("site_suitability", "residential_only"),
+                "ownership_status": b.get("ownership_status", "private_residential"),
+                "decision_status": decision_by_parcel.get(b["id"], ""),
                 "height": round(float(b["levels"]) * 3.8, 1),
                 "dominant_demo": dom_axis,
                 "students_pct": round(float(demo_vec[0]) * 100.0, 1),
@@ -427,3 +470,196 @@ def geocode_place(q: str, lang: str = "en") -> Dict[str, Any]:
         return {"results": results}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Geocode lookup failed: {exc}")
+
+
+# =============================================================================
+# Nabd v2 — Live Relate Telemetry, Read-Only Cypher & Persistent Agent Memory
+# =============================================================================
+import atexit as _atexit
+import re as _re
+
+_API_FORBIDDEN_CYPHER = _re.compile(
+    r"\b(CREATE|DELETE|DETACH|SET|MERGE|REMOVE|DROP|CALL|LOAD|FOREACH)\b",
+    _re.IGNORECASE,
+)
+_VALID_DECISION_STATUSES = {"APPROVED", "REJECTED", "WATCHLIST"}
+
+
+def _shutdown_cached_engines() -> None:
+    for _eng in list(_ENGINE_CACHE.values()):
+        try:
+            _eng.close()
+        except Exception:
+            pass
+    _ENGINE_CACHE.clear()
+
+
+_atexit.register(_shutdown_cached_engines)
+
+
+class RelateCypherRequest(BaseModel):
+    cypher: str = Field(..., min_length=6, max_length=4000)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class AgentDecisionRequest(BaseModel):
+    parcel_id: str = Field(..., min_length=1)
+    category: str = Field(default="clinic", min_length=1)
+    status: str = Field(..., description="APPROVED | REJECTED | WATCHLIST")
+    reason: str = Field(..., min_length=2, max_length=1000)
+    actor: str = Field(default="studio", max_length=80)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    block_ownership: bool = Field(default=False)
+
+
+class ParcelOwnershipRequest(BaseModel):
+    ownership_status: str = Field(..., min_length=2, max_length=80)
+    note: str = Field(default="", max_length=500)
+
+
+@app.get("/api/area/{slug}/relate/info")
+def get_relate_info(slug: str) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    info = eng.relate.store_info()
+    receipt_path = _active_data_dir() / f"{slug}.build-receipt.json"
+    receipt = None
+    if receipt_path.exists():
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except Exception:
+            receipt = None
+    return {
+        "slug": slug,
+        "schema_version": eng.meta.get("schema_version", "2.0"),
+        "store_info": info,
+        "build_receipt": receipt,
+        "trace_count": len(eng.relate.recent_traces(limit=100)),
+    }
+
+
+@app.get("/api/area/{slug}/relate/traces")
+def get_relate_traces(slug: str, limit: int = 30) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    lim = max(1, min(int(limit), 100))
+    traces = eng.relate.recent_traces(limit=lim)
+    return {
+        "slug": slug,
+        "count": len(traces),
+        "traces": traces,
+    }
+
+
+@app.post("/api/area/{slug}/relate/cypher")
+def run_relate_cypher_api(slug: str, req: RelateCypherRequest) -> Dict[str, Any]:
+    if _API_FORBIDDEN_CYPHER.search(req.cypher):
+        raise HTTPException(
+            status_code=400,
+            detail="Write or procedure clauses are blocked. Only read-only MATCH/RETURN queries are permitted.",
+        )
+    eng = get_engine(slug)
+    try:
+        res = eng.relate.query(req.cypher, tag="api:cypher_readonly")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Cypher execution failed: {exc}") from exc
+    return {
+        "slug": slug,
+        "row_count": len(res.rows),
+        "elapsed_ms": round(float(res.timings.get("elapsed_ms", 0.0)), 3),
+        "rows": res.rows[: req.limit],
+    }
+
+
+@app.get("/api/area/{slug}/decisions")
+def get_agent_decisions(slug: str, limit: int = 50) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    lim = max(1, min(int(limit), 200))
+    decisions = eng.list_agent_decisions(limit=lim)
+    return {
+        "slug": slug,
+        "count": len(decisions),
+        "decisions": decisions,
+    }
+
+
+@app.post("/api/area/{slug}/decisions")
+def create_agent_decision(slug: str, req: AgentDecisionRequest) -> Dict[str, Any]:
+    status_norm = req.status.strip().upper()
+    if status_norm not in _VALID_DECISION_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{req.status}'. Must be one of {sorted(_VALID_DECISION_STATUSES)}.",
+        )
+    eng = get_engine(slug)
+    if req.parcel_id not in eng.p_index:
+        raise HTTPException(status_code=404, detail=f"Parcel '{req.parcel_id}' not found in '{slug}'.")
+    decision = eng.commit_agent_decision(
+        parcel_id=req.parcel_id,
+        category=req.category,
+        status=status_norm,
+        reason=req.reason,
+        actor=req.actor,
+        metrics=req.metrics,
+    )
+    ownership_update = None
+    if req.block_ownership:
+        ownership_update = eng.set_parcel_ownership(
+            parcel_id=req.parcel_id,
+            ownership_status="BLOCKED_OWNERSHIP",
+            note=req.reason,
+        )
+    return {
+        "slug": slug,
+        "tx_state": "COMMITTED",
+        "decision": decision,
+        "ownership_update": ownership_update,
+    }
+
+
+@app.post("/api/area/{slug}/parcels/{parcel_id}/ownership")
+def update_parcel_ownership(slug: str, parcel_id: str, req: ParcelOwnershipRequest) -> Dict[str, Any]:
+    eng = get_engine(slug)
+    if parcel_id not in eng.p_index:
+        raise HTTPException(status_code=404, detail=f"Parcel '{parcel_id}' not found in '{slug}'.")
+    updated = eng.set_parcel_ownership(
+        parcel_id=parcel_id,
+        ownership_status=req.ownership_status.strip(),
+        note=req.note,
+    )
+    return {
+        "slug": slug,
+        "tx_state": "COMMITTED",
+        "parcel": updated,
+    }
+
+
+@app.post("/api/demo/reset")
+def reset_demo_state() -> Dict[str, Any]:
+    """Reset ephemeral public demo bundles back to clean SHA-256 verified baselines."""
+    _shutdown_cached_engines()
+    if _EPHEMERAL_TMP is not None:
+        rt = Path(_EPHEMERAL_TMP.name)
+        for item in rt.iterdir():
+            if item.is_file():
+                item.unlink()
+        _active_data_dir()
+    return {
+        "status": "reset",
+        "ephemeral_mode": _EPHEMERAL_MODE,
+        "available_areas": sorted(p.stem for p in _active_data_dir().glob("*.rl")),
+    }
+
+
+_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if (_FRONTEND_DIST / "index.html").exists():
+    _ASSETS_DIR = _FRONTEND_DIST / "assets"
+    if _ASSETS_DIR.exists():
+        app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="frontend-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found.")
+        candidate = (_FRONTEND_DIST / full_path).resolve()
+        if full_path and candidate.is_file() and _FRONTEND_DIST.resolve() in candidate.parents:
+            return FileResponse(str(candidate))
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))
