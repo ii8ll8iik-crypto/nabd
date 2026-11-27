@@ -340,7 +340,8 @@ export interface RelateTraceEntry {
   tx_state: string;
   elapsed_ms: number;
   row_count: number;
-  cypher: string;
+  statement?: string;
+  cypher?: string;
 }
 
 export interface RelateInfoResponse {

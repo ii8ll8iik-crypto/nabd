@@ -29,6 +29,8 @@ interface Props {
   onClose: () => void;
   activeSlug: string;
   refreshToken: number;
+  leftOpen?: boolean;
+  rightOpen?: boolean;
   onFlyToParcel: (lat: number, lon: number) => void;
 }
 
@@ -90,6 +92,8 @@ export function RelateInspectorPanel({
   onClose,
   activeSlug,
   refreshToken,
+  leftOpen = false,
+  rightOpen = false,
   onFlyToParcel,
 }: Props) {
   const isAr = lang === "ar";
@@ -153,7 +157,7 @@ export function RelateInspectorPanel({
     : "—";
 
   return (
-    <section className="glassbox-shell" dir={isAr ? "rtl" : "ltr"}>
+    <section className={`glassbox-shell ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`} dir={isAr ? "rtl" : "ltr"}>
       <div className="cyber-panel glassbox-card">
         <div className="glassbox-header">
           <div className="glassbox-title-group">
@@ -214,7 +218,7 @@ export function RelateInspectorPanel({
                       <span className="trace-timing mono tabular">{Number(tr.elapsed_ms).toFixed(2)} ms</span>
                       <span className="trace-rows mono tabular">{tr.row_count} rows</span>
                     </div>
-                    <code className="trace-cypher">{tr.cypher}</code>
+                    <code className="trace-cypher">{tr.statement || tr.cypher || "—"}</code>
                   </div>
                 ))
               )}
