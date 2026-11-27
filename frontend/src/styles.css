@@ -1380,3 +1380,32 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
     overflow-y: auto !important;
   }
 }
+
+/* NABD MOBILE BOTTOM BAR HITBOX FIX */
+@media (max-width: 768px) {
+  .bottom-bar,
+  .hud-bottom,
+  .action-bar {
+    position: fixed !important;
+    z-index: 60 !important;
+    pointer-events: auto !important;
+    touch-action: pan-x !important;
+  }
+
+  .bottom-bar *,
+  .hud-bottom *,
+  .action-bar * {
+    pointer-events: auto !important;
+  }
+
+  .maplibregl-ctrl-bottom-right,
+  .maplibregl-ctrl-bottom-left {
+    bottom: 78px !important;
+    z-index: 20 !important;
+  }
+
+  .maplibregl-ctrl-attrib {
+    font-size: 9px !important;
+    max-width: 70vw !important;
+  }
+}
