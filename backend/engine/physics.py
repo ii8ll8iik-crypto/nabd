@@ -590,7 +590,7 @@ class UrbanGraphEngine:
 
         b_j = np.array([self.j_index[b["junction_id"]] for b in blocks], dtype=np.int64)
         b_snap = np.array([float(b["snap_walk_min"]) for b in blocks], dtype=np.float64)
-        day_w = {"morning": 0.60, "midday": 0.72, "evening": 0.35, "late_night": 0.15}.get(time_of_day, 0.55)
+        day_w = {"morning": 0.60, "midday": 0.75, "evening": 0.32, "night": 0.14, "late_night": 0.14}.get(time_of_day, 0.55)
         b_pop = np.array([
             max(
                 1.0,

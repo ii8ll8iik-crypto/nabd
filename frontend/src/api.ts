@@ -9,10 +9,20 @@ import type {
   Lang,
   OptimalSite,
   SandboxState,
+  AgentDecisionItem,
+  RelateCypherResponse,
+  RelateInfoResponse,
+  RelateTraceEntry,
   SimulationResponse,
 } from "./types";
 
-export const API_BASE = "http://127.0.0.1:8001";
+const _envBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_BASE;
+export const API_BASE =
+  _envBase !== undefined
+    ? _envBase
+    : typeof window !== "undefined" && window.location.port === "5173"
+    ? "http://127.0.0.1:8001"
+    : "";
 
 export function buildOverridesPayload(sandbox: SandboxState) {
   const hasAny =
@@ -177,6 +187,78 @@ export async function chatStrategistApi(
       history: payload.history,
       lang: payload.lang,
     }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function fetchRelateInfo(slug: string): Promise<RelateInfoResponse> {
+  const r = await fetch(`${API_BASE}/api/area/${slug}/relate/info`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function fetchRelateTraces(slug: string, limit = 30): Promise<{ slug: string; count: number; traces: RelateTraceEntry[] }> {
+  const r = await fetch(`${API_BASE}/api/area/${slug}/relate/traces?limit=${limit}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function runRelateCypherApi(slug: string, cypher: string, limit = 50): Promise<RelateCypherResponse> {
+  const r = await fetch(`${API_BASE}/api/area/${slug}/relate/cypher`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cypher, limit }),
+  });
+  if (!r.ok) {
+    const errText = await r.text();
+    try {
+      const parsed = JSON.parse(errText);
+      throw new Error(parsed.detail || errText);
+    } catch {
+      throw new Error(errText);
+    }
+  }
+  return r.json();
+}
+
+export async function fetchAgentDecisions(slug: string, limit = 50): Promise<{ slug: string; count: number; decisions: AgentDecisionItem[] }> {
+  const r = await fetch(`${API_BASE}/api/area/${slug}/decisions?limit=${limit}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function createAgentDecisionApi(
+  slug: string,
+  payload: {
+    parcel_id: string;
+    category: string;
+    status: "APPROVED" | "REJECTED" | "WATCHLIST";
+    reason: string;
+    actor?: string;
+    metrics?: Record<string, unknown>;
+    block_ownership?: boolean;
+  }
+) {
+  const r = await fetch(`${API_BASE}/api/area/${slug}/decisions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json() as Promise<{
+    slug: string;
+    tx_state: string;
+    decision: AgentDecisionItem;
+    ownership_update?: Record<string, unknown> | null;
+  }>;
+}
+
+export async function updateParcelOwnershipApi(slug: string, parcelId: string, ownershipStatus: string, note = "") {
+  const r = await fetch(`${API_BASE}/api/area/${slug}/parcels/${encodeURIComponent(parcelId)}/ownership`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ownership_status: ownershipStatus, note }),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();

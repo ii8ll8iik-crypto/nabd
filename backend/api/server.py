@@ -237,6 +237,12 @@ def get_area_layers(slug: str) -> Dict[str, Any]:
     eng = get_engine(slug)
     raw_polys = _extract_raw_building_polygons(slug)
 
+    decision_by_parcel: Dict[str, str] = {}
+    for dec in eng.list_agent_decisions(limit=200):
+        pid = dec.get("parcel_id")
+        if pid and pid not in decision_by_parcel:
+            decision_by_parcel[pid] = str(dec.get("status") or "")
+
     b_features = []
     for i, b in enumerate(eng.blocks):
         demo_vec = eng._base_block_demo[i]
@@ -249,11 +255,24 @@ def get_area_layers(slug: str) -> Dict[str, Any]:
                 [lon - d, lat - d], [lon + d, lat - d],
                 [lon + d, lat + d], [lon - d, lat + d], [lon - d, lat - d],
             ]
+        day_p = int(b.get("day_pop") if b.get("day_pop") is not None else b["est_pop"])
+        night_p = int(b.get("night_pop") if b.get("night_pop") is not None else b["est_pop"])
+        day_ratio = round(day_p / max(day_p + night_p, 1), 3)
         b_features.append({
             "type": "Feature",
             "geometry": {"type": "Polygon", "coordinates": [ring]},
             "properties": {
-                "id": b["id"], "est_pop": b["est_pop"], "levels": b["levels"],
+                "id": b["id"],
+                "est_pop": b["est_pop"],
+                "day_pop": day_p,
+                "night_pop": night_p,
+                "day_ratio": day_ratio,
+                "levels": b["levels"],
+                "gfa_m2": b.get("gfa_m2", round(float(b.get("area_m2", 120.0)) * int(b.get("levels", 1)), 1)),
+                "land_use": b.get("land_use", "residential"),
+                "site_suitability": b.get("site_suitability", "residential_only"),
+                "ownership_status": b.get("ownership_status", "private_residential"),
+                "decision_status": decision_by_parcel.get(b["id"], ""),
                 "height": round(float(b["levels"]) * 3.8, 1),
                 "dominant_demo": dom_axis,
                 "students_pct": round(float(demo_vec[0]) * 100.0, 1),

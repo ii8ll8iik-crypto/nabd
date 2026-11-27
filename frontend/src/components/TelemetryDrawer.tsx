@@ -2,9 +2,17 @@ import { useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Bookmark,
+  Building2,
+  CheckCircle2,
+  Database,
   GitCompare,
   Layers,
+  Moon,
   Mountain,
+  ShieldAlert,
+  Sun,
+  Terminal,
   Trees,
   X,
 } from "lucide-react";
@@ -22,6 +30,14 @@ interface Props {
   onPinCurrentAsA: () => void;
   onClearPinA: () => void;
   errorText: string | null;
+  onCommitDecision?: (
+    status: "APPROVED" | "REJECTED" | "WATCHLIST",
+    reason: string,
+    blockOwnership: boolean
+  ) => Promise<void> | void;
+  decisionBusy?: boolean;
+  decisionFeedback?: string | null;
+  onOpenRelateTrace?: () => void;
 }
 
 export function TelemetryDrawer({
@@ -35,9 +51,14 @@ export function TelemetryDrawer({
   onPinCurrentAsA,
   onClearPinA,
   errorText,
+  onCommitDecision,
+  decisionBusy = false,
+  decisionFeedback = null,
+  onOpenRelateTrace,
 }: Props) {
   const isAr = lang === "ar";
   const [tab, setTab] = useState<"summary" | "ripples" | "compare">("summary");
+  const [decisionNote, setDecisionNote] = useState("");
 
   const activeScenario = simResult?.scenarios?.[scenario] ?? {
     visits: simResult?.monte_carlo_envelope.p50_base ?? 0,
@@ -48,6 +69,11 @@ export function TelemetryDrawer({
   };
 
   const tz = simResult?.terrain_and_zoning;
+  const pc = simResult?.parcel_context;
+  const rtx = simResult?.relate_transaction;
+  const dayPop = pc?.day_pop ?? 0;
+  const nightPop = pc?.night_pop ?? 0;
+  const dayPct = dayPop + nightPop > 0 ? Math.round((dayPop / (dayPop + nightPop)) * 100) : 50;
 
   const verdict = !simResult
     ? null
@@ -183,6 +209,145 @@ export function TelemetryDrawer({
                       </div>
                     </div>
                   </div>
+
+                  {pc?.parcel_id && (
+                    <div className="block-box parcel-card">
+                      <div className="block-title">
+                        <span>
+                          <Building2 size={13} style={{ verticalAlign: "middle" }} />{" "}
+                          {isAr ? "بطاقة العقار 3D ومعاملة Relate" : "3D Parcel & Relate ACID Context"}
+                        </span>
+                        <span className={`pill ${pc.ownership_status === "BLOCKED_OWNERSHIP" ? "pill-rose" : "pill-cyan"}`}>
+                          {pc.ownership_status === "BLOCKED_OWNERSHIP"
+                            ? isAr ? "ملكية محجوبة" : "BLOCKED"
+                            : (pc.land_use ?? "parcel").replace("_", " ")}
+                        </span>
+                      </div>
+
+                      <div className="parcel-meta-grid">
+                        <div className="p-stat">
+                          <span className="p-lbl">{isAr ? "القسيمة" : "Parcel"}</span>
+                          <span className="p-val mono">{pc.parcel_id}</span>
+                        </div>
+                        <div className="p-stat">
+                          <span className="p-lbl">{isAr ? "الارتفاع / المساحة" : "Floors · GFA"}</span>
+                          <span className="p-val tabular">
+                            {pc.levels ?? 1}F · {Math.round(pc.gfa_m2 ?? 0).toLocaleString()} m²
+                          </span>
+                        </div>
+                        <div className="p-stat">
+                          <span className="p-lbl">{isAr ? "الصلاحية" : "Suitability"}</span>
+                          <span className="p-val">{(pc.site_suitability ?? "—").replace(/_/g, " ")}</span>
+                        </div>
+                        <div className="p-stat">
+                          <span className="p-lbl">{isAr ? "بعد عن النقرة" : "Parcel Snap"}</span>
+                          <span className="p-val tabular">{pc.dist_to_click_m ?? 0} m</span>
+                        </div>
+                      </div>
+
+                      <div className="pulse-split">
+                        <div className="pulse-row">
+                          <span className="c-amber tabular">
+                            <Sun size={11} style={{ verticalAlign: "middle" }} /> {isAr ? "نهار" : "Day"} {dayPop.toLocaleString()}
+                          </span>
+                          <span className="c-violet tabular">
+                            {nightPop.toLocaleString()} {isAr ? "ليل" : "Night"} <Moon size={11} style={{ verticalAlign: "middle" }} />
+                          </span>
+                        </div>
+                        <div className="pulse-track">
+                          <div className="pulse-day" style={{ width: `${dayPct}%` }} />
+                        </div>
+                      </div>
+
+                      {rtx && (
+                        <div className="tx-strip">
+                          <div className="tx-strip-left">
+                            <span className="tx-dot" />
+                            <Database size={12} />
+                            <span className="mono">{rtx.tx_state}</span>
+                            {rtx.elapsed_ms != null && (
+                              <span className="mono tx-ms">{rtx.elapsed_ms.toFixed(2)}ms</span>
+                            )}
+                          </div>
+                          {onOpenRelateTrace && (
+                            <button className="tx-trace-btn" onClick={onOpenRelateTrace}>
+                              <Terminal size={11} /> {isAr ? "سجل Cypher" : "Trace"}
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {rtx?.multi_hop_context && (
+                        <div className="hop-micro-row tabular">
+                          <span>
+                            {isAr ? "خدمات 2-Hop:" : "2-Hop Services:"}{" "}
+                            <strong>{rtx.multi_hop_context.nearby_services ?? 0}</strong>
+                          </span>
+                          <span>
+                            {isAr ? "منافسون:" : "Competitors:"}{" "}
+                            <strong>{rtx.multi_hop_context.nearby_competitors ?? 0}</strong>
+                          </span>
+                          {(rtx.multi_hop_context.nearby_env_zones?.length ?? 0) > 0 && (
+                            <span className="trunc">
+                              {isAr ? "جوار:" : "Near:"} {rtx.multi_hop_context.nearby_env_zones?.slice(0, 2).join(", ")}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {onCommitDecision && (
+                        <div className="decision-box">
+                          <input
+                            className="decision-input"
+                            type="text"
+                            value={decisionNote}
+                            onChange={(e) => setDecisionNote(e.target.value)}
+                            placeholder={
+                              isAr
+                                ? "ملاحظة قرار الوكيل (مثلاً: خلاف ورثة / إيجار ممتاز)..."
+                                : "Decision rationale (e.g. Prime corner lease / Heirs dispute)..."
+                            }
+                          />
+                          <div className="decision-actions">
+                            <button
+                              className="dec-btn dec-approve"
+                              disabled={decisionBusy}
+                              onClick={() => {
+                                const rsn = decisionNote.trim() || (isAr ? "اعتماد الموقع بناءً على جدوى القوانين السبعة" : "Approved via 7-Law volumetric simulation");
+                                void onCommitDecision("APPROVED", rsn, false);
+                                setDecisionNote("");
+                              }}
+                            >
+                              <CheckCircle2 size={12} /> {isAr ? "اعتماد COMMIT" : "Approve"}
+                            </button>
+                            <button
+                              className="dec-btn dec-watch"
+                              disabled={decisionBusy}
+                              onClick={() => {
+                                const rsn = decisionNote.trim() || (isAr ? "قيد المتابعة والمراقبة" : "Watchlist for seasonal demand");
+                                void onCommitDecision("WATCHLIST", rsn, false);
+                                setDecisionNote("");
+                              }}
+                            >
+                              <Bookmark size={12} /> {isAr ? "متابعة" : "Watch"}
+                            </button>
+                            <button
+                              className="dec-btn dec-block"
+                              disabled={decisionBusy}
+                              onClick={() => {
+                                const rsn = decisionNote.trim() || (isAr ? "رفض العقار وحجب ملكيته من التحسين" : "Rejected & ownership blocked from Law 6 optimizer");
+                                void onCommitDecision("REJECTED", rsn, true);
+                                setDecisionNote("");
+                              }}
+                            >
+                              <ShieldAlert size={12} /> {isAr ? "رفض وحجب" : "Reject & Block"}
+                            </button>
+                          </div>
+                          {decisionFeedback && <div className="dec-feedback">{decisionFeedback}</div>}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {tz && (
                     <div className="block-box">
