@@ -15,14 +15,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install official Relate Linux x86_64 binary
-RUN curl -fsSL https://github.com/neo4j-labs/relate/releases/latest/download/relate-linux -o /usr/local/bin/relate \
-    && chmod +x /usr/local/bin/relate
+COPY bin/relate /usr/local/bin/relate
+RUN chmod +x /usr/local/bin/relate
 
 COPY backend/ ./backend/
 COPY data/*.rl data/*.json data/*.sha256 ./data/

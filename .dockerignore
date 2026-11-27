@@ -4,7 +4,7 @@ __pycache__
 .pytest_cache
 .git
 frontend/node_modules
-frontend/dist
 data/raw
 docs/screenshots
 *.log
+!bin/relate
