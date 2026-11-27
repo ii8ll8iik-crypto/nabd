@@ -1313,3 +1313,70 @@ select:focus, input[type="text"]:focus { border-color: var(--cyan); }
   font-weight: 600;
   max-width: min(90vw, 760px);
 }
+
+/* NABD MOBILE RESPONSIVE POLISH */
+@media (max-width: 768px) {
+  .top-bar,
+  .hud-top,
+  .header-bar,
+  .stats-strip,
+  .filter-strip,
+  .filters-row,
+  .bottom-bar,
+  .hud-bottom,
+  .action-bar {
+    max-width: 100vw;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .top-bar::-webkit-scrollbar,
+  .stats-strip::-webkit-scrollbar,
+  .filter-strip::-webkit-scrollbar,
+  .filters-row::-webkit-scrollbar,
+  .bottom-bar::-webkit-scrollbar,
+  .hud-bottom::-webkit-scrollbar {
+    display: none;
+  }
+
+  .top-bar > *,
+  .stats-strip > *,
+  .filter-strip > *,
+  .filters-row > *,
+  .bottom-bar > *,
+  .hud-bottom > * {
+    flex-shrink: 0;
+  }
+
+  .bottom-bar,
+  .hud-bottom,
+  .action-bar {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: 10px !important;
+    width: auto !important;
+    transform: none !important;
+    gap: 6px !important;
+    padding: 6px 8px !important;
+    font-size: 11px !important;
+  }
+
+  .maplibregl-ctrl-bottom-right,
+  .maplibregl-ctrl-bottom-left {
+    bottom: 68px !important;
+  }
+
+  .drawer,
+  .side-panel,
+  .sidebar,
+  .panel-left,
+  .panel-right,
+  .glassbox-shell {
+    width: min(92vw, 380px) !important;
+    max-width: 92vw !important;
+    max-height: 82dvh !important;
+    overflow-y: auto !important;
+  }
+}
