@@ -1,5 +1,8 @@
 # NABD (نبض) — Constructive Urban Physics & Multi-Hop Spatial Simulation
 
+
+> **Live 3D & Relate Graph Studio:** [https://nabd-1-0pxz.onrender.com/](https://nabd-1-0pxz.onrender.com/) — Single-container deployment featuring live `Relate` (`.rl`) ACID transactions, indexed **Irbid (`irbid-yarmouk.rl`)** & **Manhattan (`manhattan-midtown.rl`)** bundles, 3D volumetric day/night pulse, Glass-Box Cypher inspector, and guided Proof Flights (`Ctrl+K`).
+
 > **Forecasting cities by building, not only by breaking.**
 > A real-time 3D urban physics studio, `Relate` graph engine, and grounded AI strategist that simulates how injecting **any** new business or public facility ripples across real street topologies, terrain slopes, ecosystems, and competing services.
 
